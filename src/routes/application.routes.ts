@@ -1,4 +1,8 @@
-import { Router } from "express";
+import {
+  Router,
+  type Request,
+  type Response,
+} from "express";
 import { FieldValue } from "firebase-admin/firestore";
 import { z } from "zod";
 
@@ -17,14 +21,17 @@ const applicationSchema = z.object({
 
 applicationRouter.post(
   "/submit-application",
-  async (request, response) => {
-    const validation = applicationSchema.safeParse(request.body);
+  async (request: Request, response: Response) => {
+    const validation = applicationSchema.safeParse(
+      request.body
+    );
 
     if (!validation.success) {
       return response.status(400).json({
         success: false,
         message: "Invalid application details",
-        errors: validation.error.flatten().fieldErrors,
+        errors:
+          validation.error.flatten().fieldErrors,
       });
     }
 
@@ -40,17 +47,16 @@ applicationRouter.post(
           organization: application.organization,
           designation: application.designation,
           intent: application.intent || "",
-
           applicationStatus: "SUBMITTED",
           paymentStatus: "NOT_STARTED",
-
           createdAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         });
 
       return response.status(201).json({
         success: true,
-        message: "Application submitted successfully",
+        message:
+          "Application submitted successfully",
         applicationId: document.id,
       });
     } catch (error) {
