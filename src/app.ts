@@ -6,6 +6,7 @@ import express, {
 import cors from "cors";
 
 import { applicationRouter } from "./routes/application.routes.js";
+import { paymentRouter } from "./routes/payment.routes.js";
 
 export const app = express();
 
@@ -33,6 +34,7 @@ app.get(
 );
 
 app.use("/api/routes", applicationRouter);
+app.use("/api/payment", paymentRouter);
 
 app.use(
   (_request: Request, response: Response) => {
