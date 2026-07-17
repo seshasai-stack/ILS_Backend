@@ -2,22 +2,34 @@ import axios, {
   type AxiosRequestConfig,
 } from "axios";
 
-const baseUrl = process.env.HDFC_BASE_URL;
-const apiKey = process.env.HDFC_API_KEY;
-const merchantId = process.env.HDFC_MERCHANT_ID;
-const paymentPageClientId =
-  process.env.HDFC_PAYMENT_PAGE_CLIENT_ID;
+function getRequiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
 
-if (
-  !baseUrl ||
-  !apiKey ||
-  !merchantId ||
-  !paymentPageClientId
-) {
-  throw new Error(
-    "HDFC SmartGateway configuration is incomplete"
-  );
+  if (!value) {
+    throw new Error(
+      `Missing required environment variable: ${name}`
+    );
+  }
+
+  return value;
 }
+
+const baseUrl = getRequiredEnv("HDFC_BASE_URL")
+  .replace(/\/+$/, "");
+
+const apiKey = getRequiredEnv("HDFC_API_KEY");
+
+const merchantId = getRequiredEnv(
+  "HDFC_MERCHANT_ID"
+);
+
+const paymentPageClientId = getRequiredEnv(
+  "HDFC_PAYMENT_PAGE_CLIENT_ID"
+);
+
+const responseKey = getRequiredEnv(
+  "HDFC_RESPONSE_KEY"
+);
 
 export interface CreateSessionPayload {
   order_id: string;
@@ -80,14 +92,16 @@ function getRequestConfig(): AxiosRequestConfig {
 export async function createHdfcSession(
   payload: CreateSessionPayload
 ): Promise<HdfcOrderResponse> {
-  const response = await axios.post<HdfcOrderResponse>(
-    `${baseUrl.replace(/\/$/, "")}/session`,
-    {
-      ...payload,
-      payment_page_client_id: paymentPageClientId,
-    },
-    getRequestConfig()
-  );
+  const response =
+    await axios.post<HdfcOrderResponse>(
+      `${baseUrl}/session`,
+      {
+        ...payload,
+        payment_page_client_id:
+          paymentPageClientId,
+      },
+      getRequestConfig()
+    );
 
   return response.data;
 }
@@ -95,12 +109,17 @@ export async function createHdfcSession(
 export async function getHdfcOrderStatus(
   orderId: string
 ): Promise<HdfcOrderResponse> {
-  const response = await axios.get<HdfcOrderResponse>(
-    `${baseUrl.replace(/\/$/, "")}/orders/${encodeURIComponent(
-      orderId
-    )}`,
-    getRequestConfig()
-  );
+  const response =
+    await axios.get<HdfcOrderResponse>(
+      `${baseUrl}/orders/${encodeURIComponent(
+        orderId
+      )}`,
+      getRequestConfig()
+    );
 
   return response.data;
+}
+
+export function getHdfcResponseKey(): string {
+  return responseKey;
 }

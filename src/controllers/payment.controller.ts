@@ -31,14 +31,35 @@ import {
   applicationSchema,
 } from "../validators/application.validator.js";
 
-const frontendUrl = process.env.FRONTEND_URL;
-const backendUrl = process.env.BACKEND_URL;
+function getRequiredEnvironmentVariable(
+  name: string
+): string {
+  const value = process.env[name]?.trim();
 
-if (!frontendUrl || !backendUrl) {
-  throw new Error(
-    "FRONTEND_URL and BACKEND_URL are required"
-  );
+  if (!value) {
+    throw new Error(
+      `${name} environment variable is required`
+    );
+  }
+
+  return value;
 }
+
+function normalizeStringValue(
+  value: string | string[] | undefined
+): string {
+  if (Array.isArray(value)) {
+    return value[0]?.trim() ?? "";
+  }
+
+  return value?.trim() ?? "";
+}
+
+const frontendUrl =
+  getRequiredEnvironmentVariable("FRONTEND_URL");
+
+const backendUrl =
+  getRequiredEnvironmentVariable("BACKEND_URL");
 
 export async function createPayment(
   request: Request,
@@ -90,8 +111,10 @@ export async function createPayment(
           customer_id: customerId,
           customer_first_name:
             application.name,
+
           customer_email:
             application.email.toLowerCase(),
+
           customer_phone:
             application.phone,
 
@@ -120,7 +143,6 @@ export async function createPayment(
 
       return response.status(200).json({
         success: true,
-
         orderId,
 
         pricing: {
@@ -175,10 +197,12 @@ export async function paymentReturn(
   request: Request,
   response: Response
 ) {
-  const orderId =
-    typeof request.query.orderId === "string"
-      ? request.query.orderId
-      : "";
+  const orderId = normalizeStringValue(
+    request.query.orderId as
+      | string
+      | string[]
+      | undefined
+  );
 
   if (!orderId) {
     return response.redirect(
@@ -196,7 +220,9 @@ export async function paymentReturn(
 
     if (!application) {
       return response.redirect(
-        `${frontendUrl}/payment-result?status=ORDER_NOT_FOUND`
+        `${frontendUrl}/payment-result` +
+          `?orderId=${encodeURIComponent(orderId)}` +
+          `&status=ORDER_NOT_FOUND`
       );
     }
 
@@ -214,28 +240,50 @@ export async function paymentReturn(
       };
     };
 
+    const gatewayStatus =
+      String(
+        gatewayOrder.status ?? ""
+      ).toUpperCase();
+
     const statusValid =
-      String(gatewayOrder.status).toUpperCase() ===
-        "CHARGED" &&
+      gatewayStatus === "CHARGED" &&
       Number(gatewayOrder.status_id) === 21;
 
     const orderIdValid =
-      String(gatewayOrder.order_id) === orderId;
+      String(
+        gatewayOrder.order_id ?? ""
+      ) === orderId;
+
+    const localAmount =
+      Number(
+        localData.pricing?.totalAmount
+      );
+
+    const gatewayAmount =
+      Number(gatewayOrder.amount);
 
     const amountValid =
-      Number(gatewayOrder.amount) ===
-      Number(localData.pricing?.totalAmount);
+      Number.isFinite(localAmount) &&
+      Number.isFinite(gatewayAmount) &&
+      gatewayAmount === localAmount;
+
+    const localCurrency =
+      String(
+        localData.pricing?.currency ?? ""
+      ).toUpperCase();
+
+    const gatewayCurrency =
+      String(
+        gatewayOrder.currency ?? ""
+      ).toUpperCase();
 
     const currencyValid =
-      String(gatewayOrder.currency).toUpperCase() ===
-      String(
-        localData.pricing?.currency
-      ).toUpperCase();
+      gatewayCurrency === localCurrency;
 
     const transactionId =
       typeof gatewayOrder.txn_id === "string"
-        ? gatewayOrder.txn_id
-        : null;
+        ? gatewayOrder.txn_id.trim()
+        : "";
 
     if (!transactionId && statusValid) {
       throw new Error(
@@ -244,15 +292,18 @@ export async function paymentReturn(
     }
 
     if (transactionId) {
-      const duplicateTransaction = await db
-        .collection("summitApplications")
-        .where(
-          "payment.transactionId",
-          "==",
-          transactionId
-        )
-        .limit(1)
-        .get();
+      const duplicateTransaction =
+        await db
+          .collection(
+            "summitApplications"
+          )
+          .where(
+            "payment.transactionId",
+            "==",
+            transactionId
+          )
+          .limit(1)
+          .get();
 
       const usedByAnotherOrder =
         duplicateTransaction.docs.some(
@@ -264,7 +315,12 @@ export async function paymentReturn(
         await applicationReference.update({
           "payment.status":
             "DUPLICATE_TRANSACTION",
+
+          "payment.transactionId":
+            transactionId,
+
           statusResponse: gatewayOrder,
+
           updatedAt:
             FieldValue.serverTimestamp(),
         });
@@ -292,17 +348,33 @@ export async function paymentReturn(
       "payment.status": finalStatus,
 
       "payment.paidAmount": paymentValid
-        ? Number(gatewayOrder.amount)
+        ? gatewayAmount
         : null,
 
       "payment.transactionId":
-        transactionId,
+        transactionId || null,
 
       "payment.gatewayOrderId":
         gatewayOrder.id || null,
 
       "payment.paymentMethod":
-        gatewayOrder.payment_method_type || null,
+        gatewayOrder.payment_method_type ||
+        null,
+
+      "payment.gatewayStatus":
+        gatewayStatus || null,
+
+      "payment.statusId":
+        gatewayOrder.status_id ?? null,
+
+      "payment.amountMatched":
+        amountValid,
+
+      "payment.orderIdMatched":
+        orderIdValid,
+
+      "payment.currencyMatched":
+        currencyValid,
 
       statusResponse: gatewayOrder,
 
@@ -316,7 +388,9 @@ export async function paymentReturn(
     return response.redirect(
       `${frontendUrl}/payment-result` +
         `?orderId=${encodeURIComponent(orderId)}` +
-        `&status=${encodeURIComponent(finalStatus)}`
+        `&status=${encodeURIComponent(
+          finalStatus
+        )}`
     );
   } catch (error) {
     console.error(
@@ -328,6 +402,11 @@ export async function paymentReturn(
       .update({
         "payment.status":
           "VERIFICATION_FAILED",
+
+        "payment.verificationError":
+          error instanceof Error
+            ? error.message
+            : "Unknown verification error",
 
         updatedAt:
           FieldValue.serverTimestamp(),
@@ -346,7 +425,12 @@ export async function paymentStatus(
   request: Request,
   response: Response
 ) {
-  const { orderId } = request.params;
+  const orderId = normalizeStringValue(
+    request.params.orderId as
+      | string
+      | string[]
+      | undefined
+  );
 
   if (!orderId) {
     return response.status(400).json({
@@ -355,60 +439,101 @@ export async function paymentStatus(
     });
   }
 
-  const application =
-    await getApplication(orderId);
+  try {
+    const application =
+      await getApplication(orderId);
 
-  if (!application) {
-    return response.status(404).json({
+    if (!application) {
+      return response.status(404).json({
+        success: false,
+        message: "Application not found",
+      });
+    }
+
+    const data = application as {
+      applicant?: {
+        name?: string;
+        email?: string;
+      };
+
+      pricing?: {
+        baseAmount?: number;
+        gstRate?: number;
+        gstAmount?: number;
+        totalAmount?: number;
+        currency?: string;
+      };
+
+      payment?: {
+        status?: string;
+        paidAmount?: number | null;
+        transactionId?: string | null;
+        gatewayOrderId?: string | null;
+        paymentMethod?: string | null;
+      };
+    };
+
+    return response.status(200).json({
+      success: true,
+      orderId,
+
+      applicant: {
+        name:
+          data.applicant?.name || "",
+
+        email:
+          data.applicant?.email || "",
+      },
+
+      pricing: {
+        baseAmount:
+          data.pricing?.baseAmount ?? null,
+
+        gstRate:
+          data.pricing?.gstRate ?? null,
+
+        gstAmount:
+          data.pricing?.gstAmount ?? null,
+
+        totalAmount:
+          data.pricing?.totalAmount ?? null,
+
+        currency:
+          data.pricing?.currency || "INR",
+      },
+
+      payment: {
+        status:
+          data.payment?.status ||
+          "UNKNOWN",
+
+        paidAmount:
+          data.payment?.paidAmount ??
+          null,
+
+        transactionId:
+          data.payment?.transactionId ??
+          null,
+
+        gatewayOrderId:
+          data.payment?.gatewayOrderId ??
+          null,
+
+        paymentMethod:
+          data.payment?.paymentMethod ??
+          null,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Unable to retrieve payment status:",
+      error
+    );
+
+    return response.status(500).json({
       success: false,
-      message: "Application not found",
+      message:
+        "Unable to retrieve payment status",
     });
   }
-
-  const data = application as {
-    applicant?: {
-      name?: string;
-      email?: string;
-    };
-
-    pricing?: {
-      baseAmount?: number;
-      gstAmount?: number;
-      totalAmount?: number;
-      currency?: string;
-    };
-
-    payment?: {
-      status?: string;
-      paidAmount?: number;
-      transactionId?: string;
-      paymentMethod?: string;
-    };
-  };
-
-  return response.status(200).json({
-    success: true,
-    orderId,
-
-    applicant: {
-      name: data.applicant?.name || "",
-      email: data.applicant?.email || "",
-    },
-
-    pricing: data.pricing,
-
-    payment: {
-      status:
-        data.payment?.status || "UNKNOWN",
-
-      paidAmount:
-        data.payment?.paidAmount || null,
-
-      transactionId:
-        data.payment?.transactionId || null,
-
-      paymentMethod:
-        data.payment?.paymentMethod || null,
-    },
-  });
 }
