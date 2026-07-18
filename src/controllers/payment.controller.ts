@@ -119,7 +119,7 @@ export async function createPayment(
             application.phone,
 
           return_url:
-            `${backendUrl}/api/routes/payment-return` +
+            `${backendUrl}/api/payment/payment-return` +
             `?orderId=${encodeURIComponent(orderId)}`,
 
           description:
@@ -206,7 +206,7 @@ export async function paymentReturn(
 
   if (!orderId) {
     return response.redirect(
-      `${frontendUrl}/payment-result?status=INVALID_ORDER`
+      `${frontendUrl}/attend?payment=cancelled`
     );
   }
 
@@ -220,9 +220,7 @@ export async function paymentReturn(
 
     if (!application) {
       return response.redirect(
-        `${frontendUrl}/payment-result` +
-          `?orderId=${encodeURIComponent(orderId)}` +
-          `&status=ORDER_NOT_FOUND`
+        `${frontendUrl}/attend?payment=cancelled`
       );
     }
 
@@ -342,7 +340,7 @@ export async function paymentReturn(
 
     const finalStatus = paymentValid
       ? "SUCCESS"
-      : "FAILED_OR_TAMPERED";
+      : "CANCELLED_OR_FAILED";
 
     await applicationReference.update({
       "payment.status": finalStatus,
@@ -385,12 +383,16 @@ export async function paymentReturn(
         FieldValue.serverTimestamp(),
     });
 
+    if (!paymentValid) {
+      return response.redirect(
+        `${frontendUrl}/attend?payment=cancelled`
+      );
+    }
+
     return response.redirect(
       `${frontendUrl}/payment-result` +
         `?orderId=${encodeURIComponent(orderId)}` +
-        `&status=${encodeURIComponent(
-          finalStatus
-        )}`
+        `&status=SUCCESS`
     );
   } catch (error) {
     console.error(
@@ -414,9 +416,7 @@ export async function paymentReturn(
       .catch(() => undefined);
 
     return response.redirect(
-      `${frontendUrl}/payment-result` +
-        `?orderId=${encodeURIComponent(orderId)}` +
-        `&status=VERIFICATION_FAILED`
+      `${frontendUrl}/attend?payment=cancelled`
     );
   }
 }
