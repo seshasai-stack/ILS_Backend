@@ -197,8 +197,20 @@ export async function paymentReturn(
   request: Request,
   response: Response
 ) {
+  console.log("HDFC callback received:", {
+    method: request.method,
+    query: request.query,
+    body: request.body,
+  });
+
+  const callbackOrderId =
+    request.body?.orderId ??
+    request.body?.order_id ??
+    request.query.orderId ??
+    request.query.order_id;
+
   const orderId = normalizeStringValue(
-    request.query.orderId as
+    callbackOrderId as
       | string
       | string[]
       | undefined
@@ -207,13 +219,7 @@ export async function paymentReturn(
   const attendUrl = `${frontendUrl}/attend`;
 
   if (!orderId) {
-    console.error(
-      "Payment callback missing orderId",
-      {
-        query: request.query,
-        body: request.body,
-      }
-    );
+    console.error("HDFC callback missing order ID");
 
     return response.redirect(
       `${attendUrl}?payment=cancelled`
@@ -230,7 +236,7 @@ export async function paymentReturn(
 
     if (!application) {
       console.error(
-        "Payment application not found:",
+        "Application not found:",
         orderId
       );
 
@@ -259,12 +265,14 @@ export async function paymentReturn(
       gatewayOrder.status_id
     );
 
-    const gatewayOrderId = String(
-      gatewayOrder.order_id ?? ""
+    const returnedOrderId = String(
+      gatewayOrder.order_id ??
+        gatewayOrder.id ??
+        ""
     ).trim();
 
     const orderIdValid =
-      gatewayOrderId === orderId;
+      returnedOrderId === orderId;
 
     const localAmount = Number(
       localData.pricing?.totalAmount
@@ -282,13 +290,13 @@ export async function paymentReturn(
       ) < 0.01;
 
     const localCurrency = String(
-      localData.pricing?.currency ?? ""
+      localData.pricing?.currency ?? "INR"
     )
       .trim()
       .toUpperCase();
 
     const gatewayCurrency = String(
-      gatewayOrder.currency ?? ""
+      gatewayOrder.currency ?? "INR"
     )
       .trim()
       .toUpperCase();
@@ -296,28 +304,11 @@ export async function paymentReturn(
     const currencyValid =
       gatewayCurrency === localCurrency;
 
-    const transactionId =
-      typeof gatewayOrder.txn_id === "string"
-        ? gatewayOrder.txn_id.trim()
-        : "";
-
-    console.log(
-      "HDFC payment verification:",
-      {
-        orderId,
-        gatewayOrderId,
-        gatewayStatus,
-        gatewayStatusId,
-        localAmount,
-        gatewayAmount,
-        localCurrency,
-        gatewayCurrency,
-        transactionId,
-        orderIdValid,
-        amountValid,
-        currencyValid,
-      }
-    );
+    const transactionId = String(
+      gatewayOrder.txn_id ??
+        gatewayOrder.transaction_id ??
+        ""
+    ).trim();
 
     const isSuccessful =
       gatewayStatus === "CHARGED" &&
@@ -342,14 +333,29 @@ export async function paymentReturn(
     const isFailedOrCancelled =
       failedStatuses.has(gatewayStatus);
 
-    /*
-     * All non-final statuses are considered pending.
-     * This protects valid payments while HDFC is still
-     * processing or reconciling the transaction.
-     */
     const isPending =
       !isSuccessful &&
       !isFailedOrCancelled;
+
+    console.log(
+      "HDFC VERIFICATION RESULT:",
+      {
+        callbackOrderId: orderId,
+        returnedOrderId,
+        gatewayStatus,
+        gatewayStatusId,
+        localAmount,
+        gatewayAmount,
+        localCurrency,
+        gatewayCurrency,
+        transactionId,
+        orderIdValid,
+        amountValid,
+        currencyValid,
+        isSuccessful,
+        isPending,
+      }
+    );
 
     if (transactionId) {
       const duplicateTransaction =
@@ -488,13 +494,10 @@ export async function paymentReturn(
       }
     );
 
-    /*
-     * Do not mark it cancelled when the HDFC
-     * status request temporarily fails.
-     */
     await applicationReference
       .update({
-        "payment.status": "PENDING",
+        "payment.status":
+          "PENDING",
 
         "payment.verificationError":
           error instanceof Error

@@ -21,7 +21,23 @@ app.use(
   })
 );
 
+/*
+ * Parses JSON requests from your frontend.
+ */
 app.use(express.json());
+
+/*
+ * IMPORTANT:
+ * HDFC SmartGateway posts the payment callback
+ * as an application/x-www-form-urlencoded form.
+ *
+ * This must be added before the payment routes.
+ */
+app.use(
+  express.urlencoded({
+    extended: true,
+  })
+);
 
 app.get(
   "/api/health",
