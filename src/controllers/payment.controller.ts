@@ -7,6 +7,8 @@ import {
   FieldValue,
 } from "firebase-admin/firestore";
 
+import { sendPaymentSuccessEmailOnce } from "../services/payment-email.service.js";
+
 import { db } from "../config/firebase.js";
 import { REGISTRATION_PRICE } from "../config/pricing.js";
 
@@ -265,11 +267,26 @@ export async function paymentReturn(
       await getHdfcOrderStatus(orderId);
 
     const localData = application as {
+      applicant?: {
+        name?: string;
+        email?: string;
+        organization?: string;
+        designation?: string;
+      };
+
       pricing?: {
+        baseAmount?: number;
+        gstRate?: number;
+        gstAmount?: number;
         totalAmount?: number;
         currency?: string;
       };
-    };
+
+      payment?: {
+        is_sent?: number;
+        email_transaction_id?: string;
+      };
+    }
 
     const gatewayStatus = String(
       gatewayOrder.status ?? ""
@@ -565,12 +582,122 @@ export async function paymentReturn(
      * Successful payment.
      */
     if (isSuccessful) {
-      return response.redirect(
-        `${attendUrl}` +
-          `?payment=success` +
-          `&orderId=${encodeURIComponent(orderId)}`
+  const applicantEmail = String(
+    localData.applicant?.email ?? ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const applicantName = String(
+    localData.applicant?.name ?? ""
+  ).trim();
+
+  if (
+    applicantEmail &&
+    applicantName &&
+    transactionId
+  ) {
+    try {
+      await sendPaymentSuccessEmailOnce({
+        /*
+         * This orderId is the unique registration ID
+         * sent to the frontend and included in the email.
+         */
+        orderId,
+
+        transactionId,
+
+        applicantName,
+
+        applicantEmail,
+
+        organization:
+          String(
+            localData.applicant
+              ?.organization ?? ""
+          ).trim(),
+
+        designation:
+          String(
+            localData.applicant
+              ?.designation ?? ""
+          ).trim(),
+
+        baseAmount:
+          Number(
+            localData.pricing
+              ?.baseAmount ?? 0
+          ),
+
+        gstRate:
+          Number(
+            localData.pricing
+              ?.gstRate ?? 0
+          ),
+
+        gstAmount:
+          Number(
+            localData.pricing
+              ?.gstAmount ?? 0
+          ),
+
+        totalAmount:
+          Number(
+            localData.pricing
+              ?.totalAmount ?? 0
+          ),
+
+        currency:
+          String(
+            localData.pricing
+              ?.currency ?? "INR"
+          ).toUpperCase(),
+
+        paymentMethod:
+          String(
+            gatewayOrder
+              .payment_method_type ??
+              "Online payment"
+          ).trim(),
+      });
+    } catch (emailError) {
+      /*
+       * Do not change a successful payment to failed
+       * merely because email delivery failed.
+       */
+      console.error(
+        "Payment succeeded but invoice email failed:",
+        {
+          orderId,
+          transactionId,
+
+          error:
+            emailError instanceof Error
+              ? emailError.message
+              : emailError,
+        }
       );
     }
+  } else {
+    console.error(
+      "Payment email skipped because applicant details are missing:",
+      {
+        orderId,
+        transactionId,
+        applicantNamePresent:
+          Boolean(applicantName),
+        applicantEmailPresent:
+          Boolean(applicantEmail),
+      }
+    );
+  }
+
+  return response.redirect(
+    `${attendUrl}` +
+      `?payment=success` +
+      `&orderId=${encodeURIComponent(orderId)}`
+  );
+}
 
     /*
      * Explicitly failed or cancelled payment.
