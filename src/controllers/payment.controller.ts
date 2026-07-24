@@ -204,9 +204,11 @@ export async function paymentReturn(
       | undefined
   );
 
+  const attendUrl = `${frontendUrl}/attend`;
+
   if (!orderId) {
     return response.redirect(
-      `${frontendUrl}/attend?payment=cancelled`
+      `${attendUrl}?payment=cancelled`
     );
   }
 
@@ -220,7 +222,7 @@ export async function paymentReturn(
 
     if (!application) {
       return response.redirect(
-        `${frontendUrl}/attend?payment=cancelled`
+        `${attendUrl}?payment=cancelled`
       );
     }
 
@@ -232,48 +234,43 @@ export async function paymentReturn(
         totalAmount?: number;
         currency?: string;
       };
-
-      payment?: {
-        status?: string;
-      };
     };
 
-    const gatewayStatus =
-      String(
-        gatewayOrder.status ?? ""
-      ).toUpperCase();
+    const gatewayStatus = String(
+      gatewayOrder.status ?? ""
+    )
+      .trim()
+      .toUpperCase();
 
-    const statusValid =
-      gatewayStatus === "CHARGED" &&
-      Number(gatewayOrder.status_id) === 21;
+    const gatewayStatusId = Number(
+      gatewayOrder.status_id
+    );
 
     const orderIdValid =
       String(
         gatewayOrder.order_id ?? ""
       ) === orderId;
 
-    const localAmount =
-      Number(
-        localData.pricing?.totalAmount
-      );
+    const localAmount = Number(
+      localData.pricing?.totalAmount
+    );
 
-    const gatewayAmount =
-      Number(gatewayOrder.amount);
+    const gatewayAmount = Number(
+      gatewayOrder.amount
+    );
 
     const amountValid =
       Number.isFinite(localAmount) &&
       Number.isFinite(gatewayAmount) &&
       gatewayAmount === localAmount;
 
-    const localCurrency =
-      String(
-        localData.pricing?.currency ?? ""
-      ).toUpperCase();
+    const localCurrency = String(
+      localData.pricing?.currency ?? ""
+    ).toUpperCase();
 
-    const gatewayCurrency =
-      String(
-        gatewayOrder.currency ?? ""
-      ).toUpperCase();
+    const gatewayCurrency = String(
+      gatewayOrder.currency ?? ""
+    ).toUpperCase();
 
     const currencyValid =
       gatewayCurrency === localCurrency;
@@ -283,11 +280,34 @@ export async function paymentReturn(
         ? gatewayOrder.txn_id.trim()
         : "";
 
-    if (!transactionId && statusValid) {
-      throw new Error(
-        "Successful payment is missing txn_id"
+    const isSuccessful =
+      gatewayStatus === "CHARGED" &&
+      gatewayStatusId === 21 &&
+      orderIdValid &&
+      amountValid &&
+      currencyValid &&
+      Boolean(transactionId);
+
+    const finalFailureStatuses = new Set([
+      "CANCELLED",
+      "CANCELED",
+      "CANCELLED_BY_USER",
+      "CANCELED_BY_USER",
+      "FAILED",
+      "FAILURE",
+      "DECLINED",
+      "AUTHENTICATION_FAILED",
+      "AUTHORIZATION_FAILED",
+    ]);
+
+    const isFailedOrCancelled =
+      finalFailureStatuses.has(
+        gatewayStatus
       );
-    }
+
+    const isPending =
+      !isSuccessful &&
+      !isFailedOrCancelled;
 
     if (transactionId) {
       const duplicateTransaction =
@@ -317,6 +337,9 @@ export async function paymentReturn(
           "payment.transactionId":
             transactionId,
 
+          "payment.gatewayStatus":
+            gatewayStatus || null,
+
           statusResponse: gatewayOrder,
 
           updatedAt:
@@ -324,28 +347,23 @@ export async function paymentReturn(
         });
 
         return response.redirect(
-          `${frontendUrl}/payment-result` +
-            `?orderId=${encodeURIComponent(orderId)}` +
-            `&status=DUPLICATE_TRANSACTION`
+          `${attendUrl}` +
+            `?payment=pending` +
+            `&orderId=${encodeURIComponent(orderId)}`
         );
       }
     }
 
-    const paymentValid =
-      statusValid &&
-      orderIdValid &&
-      amountValid &&
-      currencyValid &&
-      Boolean(transactionId);
-
-    const finalStatus = paymentValid
+    const finalStatus = isSuccessful
       ? "SUCCESS"
-      : "CANCELLED_OR_FAILED";
+      : isPending
+        ? "PENDING"
+        : "CANCELLED_OR_FAILED";
 
     await applicationReference.update({
       "payment.status": finalStatus,
 
-      "payment.paidAmount": paymentValid
+      "payment.paidAmount": isSuccessful
         ? gatewayAmount
         : null,
 
@@ -363,7 +381,9 @@ export async function paymentReturn(
         gatewayStatus || null,
 
       "payment.statusId":
-        gatewayOrder.status_id ?? null,
+        Number.isFinite(gatewayStatusId)
+          ? gatewayStatusId
+          : null,
 
       "payment.amountMatched":
         amountValid,
@@ -383,16 +403,24 @@ export async function paymentReturn(
         FieldValue.serverTimestamp(),
     });
 
-    if (!paymentValid) {
+    if (isSuccessful) {
       return response.redirect(
-        `${frontendUrl}/attend?payment=cancelled`
+        `${attendUrl}` +
+          `?payment=success` +
+          `&orderId=${encodeURIComponent(orderId)}`
+      );
+    }
+
+    if (isPending) {
+      return response.redirect(
+        `${attendUrl}` +
+          `?payment=pending` +
+          `&orderId=${encodeURIComponent(orderId)}`
       );
     }
 
     return response.redirect(
-      `${frontendUrl}/payment-result` +
-        `?orderId=${encodeURIComponent(orderId)}` +
-        `&status=SUCCESS`
+      `${attendUrl}?payment=cancelled`
     );
   } catch (error) {
     console.error(
@@ -402,13 +430,12 @@ export async function paymentReturn(
 
     await applicationReference
       .update({
-        "payment.status":
-          "VERIFICATION_FAILED",
+        "payment.status": "PENDING",
 
         "payment.verificationError":
           error instanceof Error
             ? error.message
-            : "Unknown verification error",
+            : "Payment verification pending",
 
         updatedAt:
           FieldValue.serverTimestamp(),
@@ -416,7 +443,9 @@ export async function paymentReturn(
       .catch(() => undefined);
 
     return response.redirect(
-      `${frontendUrl}/attend?payment=cancelled`
+      `${attendUrl}` +
+        `?payment=pending` +
+        `&orderId=${encodeURIComponent(orderId)}`
     );
   }
 }
