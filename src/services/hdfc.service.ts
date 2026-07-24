@@ -47,27 +47,53 @@ export interface CreateSessionPayload {
   payment_page_client_id?: string;
 }
 
+export interface HdfcActionables {
+  recommendation?: string;
+  owner?: string;
+  is_retriable?: boolean;
+  display_message?: string;
+}
+
+export interface HdfcPaymentLinks {
+  web?: string;
+  iframe?: string;
+  mobile?: string;
+}
+
 export interface HdfcOrderResponse {
   id?: string;
   order_id?: string;
+  merchant_id?: string;
+
   customer_id?: string;
   customer_email?: string;
   customer_phone?: string;
 
-  amount?: number;
+  amount?: number | string;
   currency?: string;
 
   status?: string;
   status_id?: number;
+  gateway_id?: number;
 
   txn_id?: string;
+  transaction_id?: string;
   payment_method_type?: string;
 
-  payment_links?: {
-    web?: string;
-    iframe?: string;
-    mobile?: string;
+  bank_error_code?: string;
+  bank_error_message?: string;
+
+  resp_category?: string;
+
+  actionables?: HdfcActionables;
+
+  payment_links?: HdfcPaymentLinks;
+
+  offer_details?: {
+    offers?: unknown[];
   };
+
+  return_url?: string;
 
   [key: string]: unknown;
 }

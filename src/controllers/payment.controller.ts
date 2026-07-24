@@ -203,6 +203,10 @@ export async function paymentReturn(
     body: request.body,
   });
 
+  /*
+   * HDFC normally sends the callback as a POST form.
+   * Support both body and query parameters.
+   */
   const callbackOrderId =
     request.body?.orderId ??
     request.body?.order_id ??
@@ -219,7 +223,13 @@ export async function paymentReturn(
   const attendUrl = `${frontendUrl}/attend`;
 
   if (!orderId) {
-    console.error("HDFC callback missing order ID");
+    console.error(
+      "HDFC callback missing order ID",
+      {
+        query: request.query,
+        body: request.body,
+      }
+    );
 
     return response.redirect(
       `${attendUrl}?payment=cancelled`
@@ -241,10 +251,16 @@ export async function paymentReturn(
       );
 
       return response.redirect(
-        `${attendUrl}?payment=cancelled`
+        `${attendUrl}` +
+          `?payment=cancelled` +
+          `&orderId=${encodeURIComponent(orderId)}`
       );
     }
 
+    /*
+     * Always verify the payment through the
+     * HDFC status API using the callback order ID.
+     */
     const gatewayOrder =
       await getHdfcOrderStatus(orderId);
 
@@ -310,6 +326,15 @@ export async function paymentReturn(
         ""
     ).trim();
 
+    const responseCategory = String(
+      gatewayOrder.resp_category ?? ""
+    )
+      .trim()
+      .toUpperCase();
+
+    /*
+     * Confirmed successful payment.
+     */
     const isSuccessful =
       gatewayStatus === "CHARGED" &&
       gatewayStatusId === 21 &&
@@ -318,45 +343,100 @@ export async function paymentReturn(
       currencyValid &&
       Boolean(transactionId);
 
+    /*
+     * Final failed or cancelled statuses.
+     */
     const failedStatuses = new Set([
       "FAILED",
       "FAILURE",
       "DECLINED",
+
+      "JUSPAY_DECLINED",
+
       "CANCELLED",
       "CANCELED",
       "CANCELLED_BY_USER",
       "CANCELED_BY_USER",
+
       "AUTHENTICATION_FAILED",
       "AUTHORIZATION_FAILED",
+
+      "PAYMENT_FAILED",
+      "CARD_DECLINED",
+      "BANK_DECLINED",
+      "TRANSACTION_FAILED",
+      "GATEWAY_ERROR",
+    ]);
+
+    /*
+     * HDFC/Juspay status IDs shared in your responses:
+     *
+     * 22 = JUSPAY_DECLINED
+     * 26 = AUTHENTICATION_FAILED
+     * 27 = AUTHORIZATION_FAILED
+     */
+    const failedStatusIds = new Set([
+      22,
+      26,
+      27,
     ]);
 
     const isFailedOrCancelled =
-      failedStatuses.has(gatewayStatus);
+      failedStatuses.has(gatewayStatus) ||
+      failedStatusIds.has(gatewayStatusId) ||
+      responseCategory === "PAYMENT_FAILURE";
 
+    /*
+     * Any status that is neither successful nor
+     * explicitly failed is treated as pending.
+     */
     const isPending =
       !isSuccessful &&
       !isFailedOrCancelled;
 
     console.log(
-      "HDFC VERIFICATION RESULT:",
+      "HDFC PAYMENT VERIFICATION RESULT:",
       {
         callbackOrderId: orderId,
         returnedOrderId,
+
         gatewayStatus,
         gatewayStatusId,
+        responseCategory,
+
         localAmount,
         gatewayAmount,
+
         localCurrency,
         gatewayCurrency,
+
         transactionId,
-        orderIdValid,
-        amountValid,
-        currencyValid,
-        isSuccessful,
-        isPending,
+
+        checks: {
+          statusMatched:
+            gatewayStatus === "CHARGED",
+
+          statusIdMatched:
+            gatewayStatusId === 21,
+
+          orderIdValid,
+          amountValid,
+          currencyValid,
+
+          transactionIdPresent:
+            Boolean(transactionId),
+
+          isSuccessful,
+          isPending,
+          isFailedOrCancelled,
+        },
       }
     );
 
+    /*
+     * Prevent a single transaction ID from being
+     * used for multiple orders.
+     */
     if (transactionId) {
       const duplicateTransaction =
         await db
@@ -388,6 +468,11 @@ export async function paymentReturn(
           "payment.gatewayStatus":
             gatewayStatus || null,
 
+          "payment.statusId":
+            Number.isFinite(gatewayStatusId)
+              ? gatewayStatusId
+              : null,
+
           statusResponse:
             gatewayOrder,
 
@@ -398,18 +483,16 @@ export async function paymentReturn(
         return response.redirect(
           `${attendUrl}` +
             `?payment=pending` +
-            `&orderId=${encodeURIComponent(
-              orderId
-            )}`
+            `&orderId=${encodeURIComponent(orderId)}`
         );
       }
     }
 
     const finalStatus = isSuccessful
       ? "SUCCESS"
-      : isPending
-        ? "PENDING"
-        : "CANCELLED_OR_FAILED";
+      : isFailedOrCancelled
+        ? "CANCELLED_OR_FAILED"
+        : "PENDING";
 
     await applicationReference.update({
       "payment.status":
@@ -427,17 +510,36 @@ export async function paymentReturn(
         gatewayOrder.id || null,
 
       "payment.paymentMethod":
-        gatewayOrder
-          .payment_method_type || null,
+        gatewayOrder.payment_method_type ||
+        null,
 
       "payment.gatewayStatus":
         gatewayStatus || null,
 
       "payment.statusId":
-        Number.isFinite(
-          gatewayStatusId
-        )
+        Number.isFinite(gatewayStatusId)
           ? gatewayStatusId
+          : null,
+
+      "payment.responseCategory":
+        responseCategory || null,
+
+      "payment.failureMessage":
+        gatewayOrder.actionables
+          ?.display_message ||
+        gatewayOrder.bank_error_message ||
+        null,
+
+      "payment.failureRecommendation":
+        gatewayOrder.actionables
+          ?.recommendation ||
+        null,
+
+      "payment.isRetriable":
+        typeof gatewayOrder.actionables
+          ?.is_retriable === "boolean"
+          ? gatewayOrder.actionables
+              .is_retriable
           : null,
 
       "payment.amountMatched":
@@ -459,34 +561,42 @@ export async function paymentReturn(
         FieldValue.serverTimestamp(),
     });
 
+    /*
+     * Successful payment.
+     */
     if (isSuccessful) {
       return response.redirect(
         `${attendUrl}` +
           `?payment=success` +
-          `&orderId=${encodeURIComponent(
-            orderId
-          )}`
+          `&orderId=${encodeURIComponent(orderId)}`
       );
     }
 
-    if (isPending) {
+    /*
+     * Explicitly failed or cancelled payment.
+     */
+    if (isFailedOrCancelled) {
       return response.redirect(
         `${attendUrl}` +
-          `?payment=pending` +
-          `&orderId=${encodeURIComponent(
-            orderId
-          )}`
+          `?payment=cancelled` +
+          `&orderId=${encodeURIComponent(orderId)}`
       );
     }
 
+    /*
+     * Payment is still processing/on hold.
+     */
     return response.redirect(
-      `${attendUrl}?payment=cancelled`
+      `${attendUrl}` +
+        `?payment=pending` +
+        `&orderId=${encodeURIComponent(orderId)}`
     );
   } catch (error) {
     console.error(
       "Payment verification failed:",
       {
         orderId,
+
         error:
           error instanceof Error
             ? error.message
@@ -494,6 +604,10 @@ export async function paymentReturn(
       }
     );
 
+    /*
+     * A temporary HDFC status API or network
+     * error must not be shown as cancellation.
+     */
     await applicationReference
       .update({
         "payment.status":
@@ -512,9 +626,7 @@ export async function paymentReturn(
     return response.redirect(
       `${attendUrl}` +
         `?payment=pending` +
-        `&orderId=${encodeURIComponent(
-          orderId
-        )}`
+        `&orderId=${encodeURIComponent(orderId)}`
     );
   }
 }

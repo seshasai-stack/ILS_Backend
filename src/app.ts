@@ -21,18 +21,10 @@ app.use(
   })
 );
 
-/*
- * Parses JSON requests from your frontend.
- */
+// Frontend JSON requests
 app.use(express.json());
 
-/*
- * IMPORTANT:
- * HDFC SmartGateway posts the payment callback
- * as an application/x-www-form-urlencoded form.
- *
- * This must be added before the payment routes.
- */
+// HDFC/Juspay form callback requests
 app.use(
   express.urlencoded({
     extended: true,
