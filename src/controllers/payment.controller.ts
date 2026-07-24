@@ -207,6 +207,14 @@ export async function paymentReturn(
   const attendUrl = `${frontendUrl}/attend`;
 
   if (!orderId) {
+    console.error(
+      "Payment callback missing orderId",
+      {
+        query: request.query,
+        body: request.body,
+      }
+    );
+
     return response.redirect(
       `${attendUrl}?payment=cancelled`
     );
@@ -221,6 +229,11 @@ export async function paymentReturn(
       await getApplication(orderId);
 
     if (!application) {
+      console.error(
+        "Payment application not found:",
+        orderId
+      );
+
       return response.redirect(
         `${attendUrl}?payment=cancelled`
       );
@@ -246,10 +259,12 @@ export async function paymentReturn(
       gatewayOrder.status_id
     );
 
+    const gatewayOrderId = String(
+      gatewayOrder.order_id ?? ""
+    ).trim();
+
     const orderIdValid =
-      String(
-        gatewayOrder.order_id ?? ""
-      ) === orderId;
+      gatewayOrderId === orderId;
 
     const localAmount = Number(
       localData.pricing?.totalAmount
@@ -262,15 +277,21 @@ export async function paymentReturn(
     const amountValid =
       Number.isFinite(localAmount) &&
       Number.isFinite(gatewayAmount) &&
-      gatewayAmount === localAmount;
+      Math.abs(
+        gatewayAmount - localAmount
+      ) < 0.01;
 
     const localCurrency = String(
       localData.pricing?.currency ?? ""
-    ).toUpperCase();
+    )
+      .trim()
+      .toUpperCase();
 
     const gatewayCurrency = String(
       gatewayOrder.currency ?? ""
-    ).toUpperCase();
+    )
+      .trim()
+      .toUpperCase();
 
     const currencyValid =
       gatewayCurrency === localCurrency;
@@ -280,6 +301,24 @@ export async function paymentReturn(
         ? gatewayOrder.txn_id.trim()
         : "";
 
+    console.log(
+      "HDFC payment verification:",
+      {
+        orderId,
+        gatewayOrderId,
+        gatewayStatus,
+        gatewayStatusId,
+        localAmount,
+        gatewayAmount,
+        localCurrency,
+        gatewayCurrency,
+        transactionId,
+        orderIdValid,
+        amountValid,
+        currencyValid,
+      }
+    );
+
     const isSuccessful =
       gatewayStatus === "CHARGED" &&
       gatewayStatusId === 21 &&
@@ -288,23 +327,26 @@ export async function paymentReturn(
       currencyValid &&
       Boolean(transactionId);
 
-    const finalFailureStatuses = new Set([
+    const failedStatuses = new Set([
+      "FAILED",
+      "FAILURE",
+      "DECLINED",
       "CANCELLED",
       "CANCELED",
       "CANCELLED_BY_USER",
       "CANCELED_BY_USER",
-      "FAILED",
-      "FAILURE",
-      "DECLINED",
       "AUTHENTICATION_FAILED",
       "AUTHORIZATION_FAILED",
     ]);
 
     const isFailedOrCancelled =
-      finalFailureStatuses.has(
-        gatewayStatus
-      );
+      failedStatuses.has(gatewayStatus);
 
+    /*
+     * All non-final statuses are considered pending.
+     * This protects valid payments while HDFC is still
+     * processing or reconciling the transaction.
+     */
     const isPending =
       !isSuccessful &&
       !isFailedOrCancelled;
@@ -340,7 +382,8 @@ export async function paymentReturn(
           "payment.gatewayStatus":
             gatewayStatus || null,
 
-          statusResponse: gatewayOrder,
+          statusResponse:
+            gatewayOrder,
 
           updatedAt:
             FieldValue.serverTimestamp(),
@@ -349,7 +392,9 @@ export async function paymentReturn(
         return response.redirect(
           `${attendUrl}` +
             `?payment=pending` +
-            `&orderId=${encodeURIComponent(orderId)}`
+            `&orderId=${encodeURIComponent(
+              orderId
+            )}`
         );
       }
     }
@@ -361,11 +406,13 @@ export async function paymentReturn(
         : "CANCELLED_OR_FAILED";
 
     await applicationReference.update({
-      "payment.status": finalStatus,
+      "payment.status":
+        finalStatus,
 
-      "payment.paidAmount": isSuccessful
-        ? gatewayAmount
-        : null,
+      "payment.paidAmount":
+        isSuccessful
+          ? gatewayAmount
+          : null,
 
       "payment.transactionId":
         transactionId || null,
@@ -374,14 +421,16 @@ export async function paymentReturn(
         gatewayOrder.id || null,
 
       "payment.paymentMethod":
-        gatewayOrder.payment_method_type ||
-        null,
+        gatewayOrder
+          .payment_method_type || null,
 
       "payment.gatewayStatus":
         gatewayStatus || null,
 
       "payment.statusId":
-        Number.isFinite(gatewayStatusId)
+        Number.isFinite(
+          gatewayStatusId
+        )
           ? gatewayStatusId
           : null,
 
@@ -394,7 +443,8 @@ export async function paymentReturn(
       "payment.currencyMatched":
         currencyValid,
 
-      statusResponse: gatewayOrder,
+      statusResponse:
+        gatewayOrder,
 
       verifiedAt:
         FieldValue.serverTimestamp(),
@@ -407,7 +457,9 @@ export async function paymentReturn(
       return response.redirect(
         `${attendUrl}` +
           `?payment=success` +
-          `&orderId=${encodeURIComponent(orderId)}`
+          `&orderId=${encodeURIComponent(
+            orderId
+          )}`
       );
     }
 
@@ -415,7 +467,9 @@ export async function paymentReturn(
       return response.redirect(
         `${attendUrl}` +
           `?payment=pending` +
-          `&orderId=${encodeURIComponent(orderId)}`
+          `&orderId=${encodeURIComponent(
+            orderId
+          )}`
       );
     }
 
@@ -425,9 +479,19 @@ export async function paymentReturn(
   } catch (error) {
     console.error(
       "Payment verification failed:",
-      error
+      {
+        orderId,
+        error:
+          error instanceof Error
+            ? error.message
+            : error,
+      }
     );
 
+    /*
+     * Do not mark it cancelled when the HDFC
+     * status request temporarily fails.
+     */
     await applicationReference
       .update({
         "payment.status": "PENDING",
@@ -445,7 +509,9 @@ export async function paymentReturn(
     return response.redirect(
       `${attendUrl}` +
         `?payment=pending` +
-        `&orderId=${encodeURIComponent(orderId)}`
+        `&orderId=${encodeURIComponent(
+          orderId
+        )}`
     );
   }
 }
