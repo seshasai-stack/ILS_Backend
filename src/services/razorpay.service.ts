@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import Razorpay from "razorpay";
+import axios from "axios";
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -9,9 +9,10 @@ function required(name: string): string {
 
 const keyId = required("RAZORPAY_KEY_ID");
 const keySecret = required("RAZORPAY_KEY_SECRET");
-const razorpay = new Razorpay({
-  key_id: keyId,
-  key_secret: keySecret,
+const api = axios.create({
+  baseURL: "https://api.razorpay.com/v1",
+  auth: { username: keyId, password: keySecret },
+  timeout: 30_000,
 });
 
 export interface RazorpayOrder {
@@ -55,22 +56,27 @@ export async function createRazorpayOrder(input: {
     throw new Error("Razorpay order amount must be at least 100 paise");
   }
 
-  const order = await razorpay.orders.create({
+  const { data } = await api.post<RazorpayOrder>("/orders", {
     amount: input.amountPaise,
     currency: "INR",
     receipt: input.receipt,
     notes: input.notes,
   });
-  return order as unknown as RazorpayOrder;
+  return data;
 }
 
 export async function fetchRazorpayPayment(paymentId: string): Promise<RazorpayPayment> {
-  return await razorpay.payments.fetch(paymentId) as unknown as RazorpayPayment;
+  const { data } = await api.get<RazorpayPayment>(
+    `/payments/${encodeURIComponent(paymentId)}`,
+  );
+  return data;
 }
 
 export async function fetchRazorpayOrderPayments(orderId: string): Promise<RazorpayPayment[]> {
-  const payments = await razorpay.orders.fetchPayments(orderId);
-  return payments.items as unknown as RazorpayPayment[];
+  const { data } = await api.get<{ items: RazorpayPayment[] }>(
+    `/orders/${encodeURIComponent(orderId)}/payments`,
+  );
+  return data.items ?? [];
 }
 
 function validHmac(body: string | Buffer, signature: string, secret: string): boolean {
