@@ -7,6 +7,7 @@ import cors from "cors";
 
 import { applicationRouter } from "./routes/application.routes.js";
 import { paymentRouter } from "./routes/payment.routes.js";
+import { razorpayWebhook } from "./controllers/payment.controller.js";
 
 export const app = express();
 
@@ -21,15 +22,12 @@ app.use(
   })
 );
 
+// Razorpay requires the exact raw bytes for webhook signature verification.
+app.post("/api/payment/webhook", express.raw({ type: "application/json" }), razorpayWebhook);
+
 // Frontend JSON requests
 app.use(express.json());
 
-// HDFC/Juspay form callback requests
-app.use(
-  express.urlencoded({
-    extended: true,
-  })
-);
 
 app.get(
   "/api/health",

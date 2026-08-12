@@ -2,8 +2,9 @@ import { Router } from "express";
 
 import {
   createPayment,
-  paymentReturn,
+  cancelPayment,
   paymentStatus,
+  verifyPayment,
 } from "../controllers/payment.controller.js";
 
 export const paymentRouter = Router();
@@ -13,10 +14,8 @@ paymentRouter.post(
   createPayment
 );
 
-paymentRouter.all(
-  "/payment-return",
-  paymentReturn
-);
+paymentRouter.post("/verify", verifyPayment);
+paymentRouter.post("/cancel", cancelPayment);
 
 paymentRouter.get(
   "/payment-status/:orderId",

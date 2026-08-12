@@ -1,876 +1,230 @@
-import type {
-  Request,
-  Response,
-} from "express";
-
-import {
-  FieldValue,
-} from "firebase-admin/firestore";
-
-import { sendPaymentSuccessEmailOnce } from "../services/payment-email.service.js";
-
+import type { Request, Response } from "express";
+import { FieldValue } from "firebase-admin/firestore";
+import { z } from "zod";
 import { db } from "../config/firebase.js";
 import { REGISTRATION_PRICE } from "../config/pricing.js";
-
+import { applicationSchema } from "../validators/application.validator.js";
+import { generateCustomerId, generateOrderId } from "../utils/order-id.js";
+import { createPendingApplication, getApplication, markPaymentSessionCreated, markPaymentSessionFailed } from "../services/application.service.js";
 import {
-  generateCustomerId,
-  generateOrderId,
-} from "../utils/order-id.js";
+  createRazorpayOrder, fetchRazorpayOrderPayments, fetchRazorpayPayment, getRazorpayKeyId,
+  verifyCheckoutSignature, verifyWebhookSignature, type RazorpayPayment, type RazorpayRefund,
+} from "../services/razorpay.service.js";
+import { sendPaymentSuccessEmailOnce } from "../services/payment-email.service.js";
 
-import {
-  createHdfcSession,
-  getHdfcOrderStatus,
-} from "../services/hdfc.service.js";
+const verificationSchema = z.object({
+  orderId: z.string().trim().min(1), razorpay_order_id: z.string().trim().min(1),
+  razorpay_payment_id: z.string().trim().min(1), razorpay_signature: z.string().trim().min(1),
+});
+const cancellationSchema = z.object({ orderId: z.string().trim().min(1), reason: z.string().trim().max(300).optional() });
 
-import {
-  createPendingApplication,
-  getApplication,
-  markPaymentSessionCreated,
-  markPaymentSessionFailed,
-} from "../services/application.service.js";
+type PaymentStatus = "CREATED" | "SESSION_CREATED" | "SESSION_FAILED" | "PENDING" | "AUTHORIZED" | "FAILED" | "CANCELLED" | "SUCCESS" | "PARTIALLY_REFUNDED" | "REFUNDED";
+type StoredApplication = {
+  applicant?: { name?: string; email?: string; organization?: string; designation?: string };
+  pricing?: { baseAmount?: number; gstRate?: number; gstAmount?: number; totalAmount?: number; currency?: string };
+  payment?: { status?: PaymentStatus; gatewayOrderId?: string | null; transactionId?: string | null; paymentMethod?: string | null; paidAmount?: number | null; refundedAmount?: number | null; is_sent?: number };
+};
 
-import {
-  applicationSchema,
-} from "../validators/application.validator.js";
+const applications = db.collection("summitApplications");
+const paymentClaims = db.collection("razorpayPaymentClaims");
+const webhookEvents = db.collection("razorpayWebhookEvents");
+const refundClaims = db.collection("razorpayRefundClaims");
+const paise = (amount: number) => Math.round(amount * 100);
 
-function getRequiredEnvironmentVariable(
-  name: string
-): string {
-  const value = process.env[name]?.trim();
-
-  if (!value) {
-    throw new Error(
-      `${name} environment variable is required`
-    );
+function validatePayment(application: StoredApplication, payment: RazorpayPayment) {
+  if (application.payment?.gatewayOrderId !== payment.order_id) throw new Error("Razorpay order does not match application");
+  if (payment.amount !== paise(Number(application.pricing?.totalAmount)) || payment.currency.toUpperCase() !== String(application.pricing?.currency ?? "INR").toUpperCase()) {
+    throw new Error("Payment amount or currency mismatch");
   }
-
-  return value;
 }
 
-function normalizeStringValue(
-  value: string | string[] | undefined
-): string {
-  if (Array.isArray(value)) {
-    return value[0]?.trim() ?? "";
-  }
-
-  return value?.trim() ?? "";
-}
-
-const frontendUrl =
-  getRequiredEnvironmentVariable("FRONTEND_URL");
-
-const backendUrl =
-  getRequiredEnvironmentVariable("BACKEND_URL");
-
-export async function createPayment(
-  request: Request,
-  response: Response
-) {
-  const validation =
-    applicationSchema.safeParse(request.body);
-
-  if (!validation.success) {
-    return response.status(400).json({
-      success: false,
-      message: "Invalid application details",
-      errors:
-        validation.error.flatten().fieldErrors,
-    });
-  }
-
-  const application = validation.data;
-
-  const orderId = generateOrderId();
-  const customerId = generateCustomerId();
-
-  const {
-    baseAmount,
-    gstRate,
-    gstAmount,
-    totalAmount,
-    currency,
-  } = REGISTRATION_PRICE;
-
+async function sendSuccessEmail(localOrderId: string, payment: RazorpayPayment, application?: StoredApplication) {
+  const data = application ?? await getApplication(localOrderId) as StoredApplication | null;
+  if (!data) return;
+  const email = String(data.applicant?.email ?? "").trim().toLowerCase();
+  const name = String(data.applicant?.name ?? "").trim();
+  if (!email || !name) return;
   try {
-    await createPendingApplication({
-      application,
-      orderId,
-      customerId,
-      baseAmount,
-      gstRate,
-      gstAmount,
-      totalAmount,
+    await sendPaymentSuccessEmailOnce({
+      orderId: localOrderId, transactionId: payment.id, applicantName: name, applicantEmail: email,
+      organization: data.applicant?.organization, designation: data.applicant?.designation,
+      baseAmount: Number(data.pricing?.baseAmount ?? 0), gstRate: Number(data.pricing?.gstRate ?? 0),
+      gstAmount: Number(data.pricing?.gstAmount ?? 0), totalAmount: Number(data.pricing?.totalAmount ?? 0),
+      currency: String(data.pricing?.currency ?? "INR").toUpperCase(), paymentMethod: payment.method ?? "Online payment",
     });
-
-    try {
-      const hdfcResponse =
-        await createHdfcSession({
-          order_id: orderId,
-          amount: totalAmount.toFixed(2),
-          currency,
-
-          customer_id: customerId,
-          customer_first_name:
-            application.name,
-
-          customer_email:
-            application.email.toLowerCase(),
-
-          customer_phone:
-            application.phone,
-
-          return_url:
-            `${backendUrl}/api/payment/payment-return` +
-            `?orderId=${encodeURIComponent(orderId)}`,
-
-          description:
-            `ILS 2026 registration ${orderId}`,
-        });
-
-      const paymentUrl =
-        hdfcResponse.payment_links?.web;
-
-      if (!paymentUrl) {
-        throw new Error(
-          "HDFC did not return payment_links.web"
-        );
-      }
-
-      await markPaymentSessionCreated(
-        orderId,
-        paymentUrl,
-        hdfcResponse
-      );
-
-      return response.status(200).json({
-        success: true,
-        orderId,
-
-        pricing: {
-          baseAmount,
-          gstRate,
-          gstAmount,
-          totalAmount,
-          currency,
-        },
-
-        paymentUrl,
-      });
-    } catch (gatewayError) {
-      const message =
-        gatewayError instanceof Error
-          ? gatewayError.message
-          : "HDFC session creation failed";
-
-      console.error(
-        "HDFC session creation failed:",
-        gatewayError
-      );
-
-      await markPaymentSessionFailed(
-        orderId,
-        message
-      );
-
-      return response.status(502).json({
-        success: false,
-        orderId,
-        applicationSaved: true,
-        message:
-          "Application was saved, but payment could not be initiated.",
-      });
-    }
-  } catch (error) {
-    console.error(
-      "Create payment failed:",
-      error
-    );
-
-    return response.status(500).json({
-      success: false,
-      message:
-        "Unable to save application and create payment",
-    });
-  }
+  } catch (error) { console.error("Payment succeeded but confirmation email failed", { localOrderId, error }); }
 }
 
-export async function paymentReturn(
-  request: Request,
-  response: Response
-) {
-  console.log("HDFC callback received:", {
-    method: request.method,
-    query: request.query,
-    body: request.body,
+async function completePayment(localOrderId: string, payment: RazorpayPayment, source: "checkout" | "webhook" | "reconciliation") {
+  if (!payment.captured || payment.status !== "captured") throw new Error("Payment has not been captured");
+  const application = await getApplication(localOrderId) as StoredApplication | null;
+  if (!application) throw new Error("Application not found");
+  validatePayment(application, payment);
+  const applicationRef = applications.doc(localOrderId);
+  const claimRef = paymentClaims.doc(payment.id);
+
+  await db.runTransaction(async (transaction) => {
+    const [freshApplication, claim] = await Promise.all([transaction.get(applicationRef), transaction.get(claimRef)]);
+    if (!freshApplication.exists) throw new Error("Application not found");
+    if (claim.exists && claim.data()?.orderId !== localOrderId) throw new Error("Payment is already linked to another application");
+    const current = freshApplication.data() as StoredApplication;
+    validatePayment(current, payment);
+    transaction.set(claimRef, { orderId: localOrderId, paymentId: payment.id, createdAt: FieldValue.serverTimestamp() }, { merge: true });
+    transaction.update(applicationRef, {
+      "payment.status": "SUCCESS", "payment.paidAmount": payment.amount / 100,
+      "payment.transactionId": payment.id, "payment.paymentMethod": payment.method ?? null,
+      "payment.gatewayStatus": payment.status, "payment.amountMatched": true,
+      "payment.orderIdMatched": true, "payment.currencyMatched": true,
+      "payment.verificationSource": source, "payment.failureMessage": null,
+      verifiedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+    });
   });
-
-  /*
-   * HDFC normally sends the callback as a POST form.
-   * Support both body and query parameters.
-   */
-  const callbackOrderId =
-    request.body?.orderId ??
-    request.body?.order_id ??
-    request.query.orderId ??
-    request.query.order_id;
-
-  const orderId = normalizeStringValue(
-    callbackOrderId as
-      | string
-      | string[]
-      | undefined
-  );
-
-  const attendUrl = `${frontendUrl}/attend`;
-
-  if (!orderId) {
-    console.error(
-      "HDFC callback missing order ID",
-      {
-        query: request.query,
-        body: request.body,
-      }
-    );
-
-    return response.redirect(
-      `${attendUrl}?payment=cancelled`
-    );
-  }
-
-  const applicationReference = db
-    .collection("summitApplications")
-    .doc(orderId);
-
-  try {
-    const application =
-      await getApplication(orderId);
-
-    if (!application) {
-      console.error(
-        "Application not found:",
-        orderId
-      );
-
-      return response.redirect(
-        `${attendUrl}` +
-          `?payment=cancelled` +
-          `&orderId=${encodeURIComponent(orderId)}`
-      );
-    }
-
-    /*
-     * Always verify the payment through the
-     * HDFC status API using the callback order ID.
-     */
-    const gatewayOrder =
-      await getHdfcOrderStatus(orderId);
-
-    const localData = application as {
-      applicant?: {
-        name?: string;
-        email?: string;
-        organization?: string;
-        designation?: string;
-      };
-
-      pricing?: {
-        baseAmount?: number;
-        gstRate?: number;
-        gstAmount?: number;
-        totalAmount?: number;
-        currency?: string;
-      };
-
-      payment?: {
-        is_sent?: number;
-        email_transaction_id?: string;
-      };
-    }
-
-    const gatewayStatus = String(
-      gatewayOrder.status ?? ""
-    )
-      .trim()
-      .toUpperCase();
-
-    const gatewayStatusId = Number(
-      gatewayOrder.status_id
-    );
-
-    const returnedOrderId = String(
-      gatewayOrder.order_id ??
-        gatewayOrder.id ??
-        ""
-    ).trim();
-
-    const orderIdValid =
-      returnedOrderId === orderId;
-
-    const localAmount = Number(
-      localData.pricing?.totalAmount
-    );
-
-    const gatewayAmount = Number(
-      gatewayOrder.amount
-    );
-
-    const amountValid =
-      Number.isFinite(localAmount) &&
-      Number.isFinite(gatewayAmount) &&
-      Math.abs(
-        gatewayAmount - localAmount
-      ) < 0.01;
-
-    const localCurrency = String(
-      localData.pricing?.currency ?? "INR"
-    )
-      .trim()
-      .toUpperCase();
-
-    const gatewayCurrency = String(
-      gatewayOrder.currency ?? "INR"
-    )
-      .trim()
-      .toUpperCase();
-
-    const currencyValid =
-      gatewayCurrency === localCurrency;
-
-    const transactionId = String(
-      gatewayOrder.txn_id ??
-        gatewayOrder.transaction_id ??
-        ""
-    ).trim();
-
-    const responseCategory = String(
-      gatewayOrder.resp_category ?? ""
-    )
-      .trim()
-      .toUpperCase();
-
-    /*
-     * Confirmed successful payment.
-     */
-    const isSuccessful =
-      gatewayStatus === "CHARGED" &&
-      gatewayStatusId === 21 &&
-      orderIdValid &&
-      amountValid &&
-      currencyValid &&
-      Boolean(transactionId);
-
-    /*
-     * Final failed or cancelled statuses.
-     */
-    const failedStatuses = new Set([
-      "FAILED",
-      "FAILURE",
-      "DECLINED",
-
-      "JUSPAY_DECLINED",
-
-      "CANCELLED",
-      "CANCELED",
-      "CANCELLED_BY_USER",
-      "CANCELED_BY_USER",
-
-      "AUTHENTICATION_FAILED",
-      "AUTHORIZATION_FAILED",
-
-      "PAYMENT_FAILED",
-      "CARD_DECLINED",
-      "BANK_DECLINED",
-      "TRANSACTION_FAILED",
-      "GATEWAY_ERROR",
-    ]);
-
-    /*
-     * HDFC/Juspay status IDs shared in your responses:
-     *
-     * 22 = JUSPAY_DECLINED
-     * 26 = AUTHENTICATION_FAILED
-     * 27 = AUTHORIZATION_FAILED
-     */
-    const failedStatusIds = new Set([
-      22,
-      26,
-      27,
-    ]);
-
-    const isFailedOrCancelled =
-      failedStatuses.has(gatewayStatus) ||
-      failedStatusIds.has(gatewayStatusId) ||
-      responseCategory === "PAYMENT_FAILURE";
-
-    /*
-     * Any status that is neither successful nor
-     * explicitly failed is treated as pending.
-     */
-    const isPending =
-      !isSuccessful &&
-      !isFailedOrCancelled;
-
-    console.log(
-      "HDFC PAYMENT VERIFICATION RESULT:",
-      {
-        callbackOrderId: orderId,
-        returnedOrderId,
-
-        gatewayStatus,
-        gatewayStatusId,
-        responseCategory,
-
-        localAmount,
-        gatewayAmount,
-
-        localCurrency,
-        gatewayCurrency,
-
-        transactionId,
-
-        checks: {
-          statusMatched:
-            gatewayStatus === "CHARGED",
-
-          statusIdMatched:
-            gatewayStatusId === 21,
-
-          orderIdValid,
-          amountValid,
-          currencyValid,
-
-          transactionIdPresent:
-            Boolean(transactionId),
-
-          isSuccessful,
-          isPending,
-          isFailedOrCancelled,
-        },
-      }
-    );
-
-    /*
-     * Prevent a single transaction ID from being
-     * used for multiple orders.
-     */
-    if (transactionId) {
-      const duplicateTransaction =
-        await db
-          .collection(
-            "summitApplications"
-          )
-          .where(
-            "payment.transactionId",
-            "==",
-            transactionId
-          )
-          .limit(1)
-          .get();
-
-      const usedByAnotherOrder =
-        duplicateTransaction.docs.some(
-          (document) =>
-            document.id !== orderId
-        );
-
-      if (usedByAnotherOrder) {
-        await applicationReference.update({
-          "payment.status":
-            "DUPLICATE_TRANSACTION",
-
-          "payment.transactionId":
-            transactionId,
-
-          "payment.gatewayStatus":
-            gatewayStatus || null,
-
-          "payment.statusId":
-            Number.isFinite(gatewayStatusId)
-              ? gatewayStatusId
-              : null,
-
-          statusResponse:
-            gatewayOrder,
-
-          updatedAt:
-            FieldValue.serverTimestamp(),
-        });
-
-        return response.redirect(
-          `${attendUrl}` +
-            `?payment=pending` +
-            `&orderId=${encodeURIComponent(orderId)}`
-        );
-      }
-    }
-
-    const finalStatus = isSuccessful
-      ? "SUCCESS"
-      : isFailedOrCancelled
-        ? "CANCELLED_OR_FAILED"
-        : "PENDING";
-
-    await applicationReference.update({
-      "payment.status":
-        finalStatus,
-
-      "payment.paidAmount":
-        isSuccessful
-          ? gatewayAmount
-          : null,
-
-      "payment.transactionId":
-        transactionId || null,
-
-      "payment.gatewayOrderId":
-        gatewayOrder.id || null,
-
-      "payment.paymentMethod":
-        gatewayOrder.payment_method_type ||
-        null,
-
-      "payment.gatewayStatus":
-        gatewayStatus || null,
-
-      "payment.statusId":
-        Number.isFinite(gatewayStatusId)
-          ? gatewayStatusId
-          : null,
-
-      "payment.responseCategory":
-        responseCategory || null,
-
-      "payment.failureMessage":
-        gatewayOrder.actionables
-          ?.display_message ||
-        gatewayOrder.bank_error_message ||
-        null,
-
-      "payment.failureRecommendation":
-        gatewayOrder.actionables
-          ?.recommendation ||
-        null,
-
-      "payment.isRetriable":
-        typeof gatewayOrder.actionables
-          ?.is_retriable === "boolean"
-          ? gatewayOrder.actionables
-              .is_retriable
-          : null,
-
-      "payment.amountMatched":
-        amountValid,
-
-      "payment.orderIdMatched":
-        orderIdValid,
-
-      "payment.currencyMatched":
-        currencyValid,
-
-      statusResponse:
-        gatewayOrder,
-
-      verifiedAt:
-        FieldValue.serverTimestamp(),
-
-      updatedAt:
-        FieldValue.serverTimestamp(),
+  await sendSuccessEmail(localOrderId, payment, application);
+}
+
+async function updateNonSuccess(localOrderId: string, status: PaymentStatus, payment?: RazorpayPayment, extra: Record<string, unknown> = {}) {
+  const ref = applications.doc(localOrderId);
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
+    if (!snapshot.exists) throw new Error("Application not found");
+    const current = (snapshot.data() as StoredApplication).payment?.status;
+    // Final paid/refunded states cannot be downgraded by late or out-of-order events.
+    if (["SUCCESS", "PARTIALLY_REFUNDED", "REFUNDED"].includes(current ?? "")) return;
+    transaction.update(ref, {
+      "payment.status": status, "payment.gatewayStatus": payment?.status ?? status.toLowerCase(),
+      ...(payment?.id ? { "payment.transactionId": payment.id } : {}),
+      ...(payment?.method ? { "payment.paymentMethod": payment.method } : {}),
+      ...extra, updatedAt: FieldValue.serverTimestamp(),
     });
+  });
+}
 
-    /*
-     * Successful payment.
-     */
-    if (isSuccessful) {
-  const applicantEmail = String(
-    localData.applicant?.email ?? ""
-  )
-    .trim()
-    .toLowerCase();
+async function findLocalOrderId(gatewayOrderId: string, receipt?: string) {
+  if (receipt) {
+    const direct = await applications.doc(receipt).get();
+    if (direct.exists && direct.data()?.payment?.gatewayOrderId === gatewayOrderId) return receipt;
+  }
+  return (await applications.where("payment.gatewayOrderId", "==", gatewayOrderId).limit(1).get()).docs[0]?.id;
+}
 
-  const applicantName = String(
-    localData.applicant?.name ?? ""
-  ).trim();
+async function reconcile(localOrderId: string, application: StoredApplication) {
+  const gatewayOrderId = application.payment?.gatewayOrderId;
+  if (!gatewayOrderId || ["REFUNDED", "PARTIALLY_REFUNDED"].includes(application.payment?.status ?? "")) return;
+  const payments = await fetchRazorpayOrderPayments(gatewayOrderId);
+  const captured = payments.find((item) => item.captured && item.status === "captured");
+  if (captured) return completePayment(localOrderId, captured, "reconciliation");
+  const authorized = payments.find((item) => item.status === "authorized");
+  if (authorized) return updateNonSuccess(localOrderId, "AUTHORIZED", authorized);
+  const failed = payments.find((item) => item.status === "failed");
+  if (failed) return updateNonSuccess(localOrderId, "FAILED", failed, { "payment.failureMessage": failed.error_description ?? null, "payment.failureCode": failed.error_code ?? null });
+}
 
-  if (
-    applicantEmail &&
-    applicantName &&
-    transactionId
-  ) {
+export async function createPayment(request: Request, response: Response) {
+  const validation = applicationSchema.safeParse(request.body);
+  if (!validation.success) return response.status(400).json({ success: false, message: "Invalid application details", errors: validation.error.flatten().fieldErrors });
+  const application = validation.data, orderId = generateOrderId(), customerId = generateCustomerId();
+  const { baseAmount, gstRate, gstAmount, totalAmount, currency } = REGISTRATION_PRICE;
+  try {
+    await createPendingApplication({ application, orderId, customerId, baseAmount, gstRate, gstAmount, totalAmount });
     try {
-      await sendPaymentSuccessEmailOnce({
-        /*
-         * This orderId is the unique registration ID
-         * sent to the frontend and included in the email.
-         */
-        orderId,
-
-        transactionId,
-
-        applicantName,
-
-        applicantEmail,
-
-        organization:
-          String(
-            localData.applicant
-              ?.organization ?? ""
-          ).trim(),
-
-        designation:
-          String(
-            localData.applicant
-              ?.designation ?? ""
-          ).trim(),
-
-        baseAmount:
-          Number(
-            localData.pricing
-              ?.baseAmount ?? 0
-          ),
-
-        gstRate:
-          Number(
-            localData.pricing
-              ?.gstRate ?? 0
-          ),
-
-        gstAmount:
-          Number(
-            localData.pricing
-              ?.gstAmount ?? 0
-          ),
-
-        totalAmount:
-          Number(
-            localData.pricing
-              ?.totalAmount ?? 0
-          ),
-
-        currency:
-          String(
-            localData.pricing
-              ?.currency ?? "INR"
-          ).toUpperCase(),
-
-        paymentMethod:
-          String(
-            gatewayOrder
-              .payment_method_type ??
-              "Online payment"
-          ).trim(),
-      });
-    } catch (emailError) {
-      /*
-       * Do not change a successful payment to failed
-       * merely because email delivery failed.
-       */
-      console.error(
-        "Payment succeeded but invoice email failed:",
-        {
-          orderId,
-          transactionId,
-
-          error:
-            emailError instanceof Error
-              ? emailError.message
-              : emailError,
-        }
-      );
+      const gatewayOrder = await createRazorpayOrder({ receipt: orderId, amountPaise: paise(totalAmount), notes: { localOrderId: orderId, customerId } });
+      await markPaymentSessionCreated(orderId, gatewayOrder.id, gatewayOrder);
+      return response.status(200).json({ success: true, orderId, pricing: { baseAmount, gstRate, gstAmount, totalAmount, currency }, razorpay: { keyId: getRazorpayKeyId(), orderId: gatewayOrder.id, amount: gatewayOrder.amount, currency: gatewayOrder.currency }, customer: { name: application.name, email: application.email.toLowerCase(), contact: application.phone } });
+    } catch (error) {
+      await markPaymentSessionFailed(orderId, error instanceof Error ? error.message : "Razorpay order creation failed");
+      return response.status(502).json({ success: false, orderId, applicationSaved: true, message: "Application was saved, but payment could not be initiated." });
     }
-  } else {
-    console.error(
-      "Payment email skipped because applicant details are missing:",
-      {
-        orderId,
-        transactionId,
-        applicantNamePresent:
-          Boolean(applicantName),
-        applicantEmailPresent:
-          Boolean(applicantEmail),
-      }
-    );
-  }
-
-  return response.redirect(
-    `${attendUrl}` +
-      `?payment=success` +
-      `&orderId=${encodeURIComponent(orderId)}`
-  );
+  } catch (error) { console.error("Create payment failed", error); return response.status(500).json({ success: false, message: "Unable to save application and create payment" }); }
 }
 
-    /*
-     * Explicitly failed or cancelled payment.
-     */
-    if (isFailedOrCancelled) {
-      return response.redirect(
-        `${attendUrl}` +
-          `?payment=cancelled` +
-          `&orderId=${encodeURIComponent(orderId)}`
-      );
-    }
-
-    /*
-     * Payment is still processing/on hold.
-     */
-    return response.redirect(
-      `${attendUrl}` +
-        `?payment=pending` +
-        `&orderId=${encodeURIComponent(orderId)}`
-    );
-  } catch (error) {
-    console.error(
-      "Payment verification failed:",
-      {
-        orderId,
-
-        error:
-          error instanceof Error
-            ? error.message
-            : error,
-      }
-    );
-
-    /*
-     * A temporary HDFC status API or network
-     * error must not be shown as cancellation.
-     */
-    await applicationReference
-      .update({
-        "payment.status":
-          "PENDING",
-
-        "payment.verificationError":
-          error instanceof Error
-            ? error.message
-            : "Payment verification pending",
-
-        updatedAt:
-          FieldValue.serverTimestamp(),
-      })
-      .catch(() => undefined);
-
-    return response.redirect(
-      `${attendUrl}` +
-        `?payment=pending` +
-        `&orderId=${encodeURIComponent(orderId)}`
-    );
-  }
-}
-
-export async function paymentStatus(
-  request: Request,
-  response: Response
-) {
-  const orderId = normalizeStringValue(
-    request.params.orderId as
-      | string
-      | string[]
-      | undefined
-  );
-
-  if (!orderId) {
-    return response.status(400).json({
-      success: false,
-      message: "orderId is required",
-    });
-  }
-
+export async function verifyPayment(request: Request, response: Response) {
+  const parsed = verificationSchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ success: false, message: "Invalid payment verification payload" });
+  const { orderId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = parsed.data;
   try {
-    const application =
-      await getApplication(orderId);
-
-    if (!application) {
-      return response.status(404).json({
-        success: false,
-        message: "Application not found",
-      });
+    const application = await getApplication(orderId) as StoredApplication | null;
+    if (!application || application.payment?.gatewayOrderId !== razorpay_order_id) return response.status(400).json({ success: false, message: "Order mismatch" });
+    if (!verifyCheckoutSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature)) return response.status(400).json({ success: false, message: "Invalid payment signature" });
+    const payment = await fetchRazorpayPayment(razorpay_payment_id);
+    if (payment.status === "authorized") {
+      await updateNonSuccess(orderId, "AUTHORIZED", payment);
+      return response.status(202).json({ success: true, orderId, paymentStatus: "AUTHORIZED", message: "Payment is awaiting capture" });
     }
+    await completePayment(orderId, payment, "checkout");
+    return response.status(200).json({ success: true, orderId, paymentStatus: "SUCCESS" });
+  } catch (error) { console.error("Payment verification failed", { orderId, error }); return response.status(409).json({ success: false, orderId, message: error instanceof Error ? error.message : "Payment verification failed" }); }
+}
 
-    const data = application as {
-      applicant?: {
-        name?: string;
-        email?: string;
-      };
+export async function cancelPayment(request: Request, response: Response) {
+  const parsed = cancellationSchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ success: false, message: "Invalid cancellation payload" });
+  try {
+    const application = await getApplication(parsed.data.orderId) as StoredApplication | null;
+    if (!application) return response.status(404).json({ success: false, message: "Application not found" });
+    await reconcile(parsed.data.orderId, application); // Never cancel a payment that Razorpay already captured.
+    await updateNonSuccess(parsed.data.orderId, "CANCELLED", undefined, { "payment.cancellationReason": parsed.data.reason ?? "Checkout dismissed", "payment.cancelledAt": FieldValue.serverTimestamp() });
+    const fresh = await getApplication(parsed.data.orderId) as StoredApplication;
+    return response.status(200).json({ success: true, orderId: parsed.data.orderId, paymentStatus: fresh.payment?.status });
+  } catch (error) { console.error("Cancellation update failed", error); return response.status(503).json({ success: false, message: "Could not confirm cancellation; check payment status again" }); }
+}
 
-      pricing?: {
-        baseAmount?: number;
-        gstRate?: number;
-        gstAmount?: number;
-        totalAmount?: number;
-        currency?: string;
-      };
-
-      payment?: {
-        status?: string;
-        paidAmount?: number | null;
-        transactionId?: string | null;
-        gatewayOrderId?: string | null;
-        paymentMethod?: string | null;
-      };
-    };
-
-    return response.status(200).json({
-      success: true,
-      orderId,
-
-      applicant: {
-        name:
-          data.applicant?.name || "",
-
-        email:
-          data.applicant?.email || "",
-      },
-
-      pricing: {
-        baseAmount:
-          data.pricing?.baseAmount ?? null,
-
-        gstRate:
-          data.pricing?.gstRate ?? null,
-
-        gstAmount:
-          data.pricing?.gstAmount ?? null,
-
-        totalAmount:
-          data.pricing?.totalAmount ?? null,
-
-        currency:
-          data.pricing?.currency || "INR",
-      },
-
-      payment: {
-        status:
-          data.payment?.status ||
-          "UNKNOWN",
-
-        paidAmount:
-          data.payment?.paidAmount ??
-          null,
-
-        transactionId:
-          data.payment?.transactionId ??
-          null,
-
-        gatewayOrderId:
-          data.payment?.gatewayOrderId ??
-          null,
-
-        paymentMethod:
-          data.payment?.paymentMethod ??
-          null,
-      },
-    });
+export async function razorpayWebhook(request: Request, response: Response) {
+  const signature = request.header("x-razorpay-signature") ?? "", eventId = request.header("x-razorpay-event-id") ?? "";
+  const rawBody = request.body as Buffer;
+  if (!Buffer.isBuffer(rawBody) || !verifyWebhookSignature(rawBody, signature)) return response.status(400).json({ success: false, message: "Invalid webhook signature" });
+  try {
+    if (eventId && (await webhookEvents.doc(eventId).get()).data()?.status === "PROCESSED") return response.status(200).json({ received: true, duplicate: true });
+    const event = JSON.parse(rawBody.toString("utf8")) as { event?: string; payload?: { payment?: { entity?: RazorpayPayment }; order?: { entity?: { receipt?: string } }; refund?: { entity?: RazorpayRefund } } };
+    const payment = event.payload?.payment?.entity;
+    if (payment) {
+      const localOrderId = await findLocalOrderId(payment.order_id, event.payload?.order?.entity?.receipt);
+      if (localOrderId) {
+        if (event.event === "payment.captured" || event.event === "order.paid") await completePayment(localOrderId, payment, "webhook");
+        else if (event.event === "payment.authorized") await updateNonSuccess(localOrderId, "AUTHORIZED", payment);
+        else if (event.event === "payment.failed") await updateNonSuccess(localOrderId, "FAILED", payment, { "payment.failureMessage": payment.error_description ?? null, "payment.failureCode": payment.error_code ?? null });
+      }
+    }
+    const refund = event.payload?.refund?.entity;
+    if (refund && (event.event === "refund.processed" || event.event === "refund.failed")) {
+      const claim = await paymentClaims.doc(refund.payment_id).get();
+      const localOrderId = claim.data()?.orderId as string | undefined;
+      if (localOrderId) {
+        const ref = applications.doc(localOrderId);
+        const refundClaimRef = refundClaims.doc(refund.id);
+        await db.runTransaction(async (transaction) => {
+          const [snapshot, refundClaim] = await Promise.all([transaction.get(ref), transaction.get(refundClaimRef)]);
+          if (!snapshot.exists) return;
+          if (event.event === "refund.failed") { transaction.update(ref, { "payment.refundStatus": "FAILED", "payment.refundId": refund.id, updatedAt: FieldValue.serverTimestamp() }); return; }
+          if (refundClaim.exists) return;
+          const data = snapshot.data() as StoredApplication;
+          const refunded = Math.min(Number(data.payment?.refundedAmount ?? 0) + refund.amount / 100, Number(data.payment?.paidAmount ?? Infinity));
+          const status = refunded >= Number(data.payment?.paidAmount ?? Infinity) ? "REFUNDED" : "PARTIALLY_REFUNDED";
+          transaction.create(refundClaimRef, { orderId: localOrderId, paymentId: refund.payment_id, amount: refund.amount, processedAt: FieldValue.serverTimestamp() });
+          transaction.update(ref, { "payment.status": status, "payment.refundedAmount": refunded, "payment.refundStatus": refund.status, "payment.refundId": refund.id, updatedAt: FieldValue.serverTimestamp() });
+        });
+      }
+    }
+    if (eventId) await webhookEvents.doc(eventId).set({ status: "PROCESSED", event: event.event ?? null, processedAt: FieldValue.serverTimestamp() });
+    return response.status(200).json({ received: true });
   } catch (error) {
-    console.error(
-      "Unable to retrieve payment status:",
-      error
-    );
-
-    return response.status(500).json({
-      success: false,
-      message:
-        "Unable to retrieve payment status",
-    });
+    if (eventId) await webhookEvents.doc(eventId).set({ status: "FAILED", error: error instanceof Error ? error.message : "Unknown error", updatedAt: FieldValue.serverTimestamp() }, { merge: true }).catch(() => undefined);
+    console.error("Razorpay webhook processing failed", error); return response.status(500).json({ received: false });
   }
+}
+
+export async function paymentStatus(request: Request, response: Response) {
+  const orderId = String(request.params.orderId ?? "").trim();
+  if (!orderId) return response.status(400).json({ success: false, message: "orderId is required" });
+  try {
+    let data = await getApplication(orderId) as StoredApplication | null;
+    if (!data) return response.status(404).json({ success: false, message: "Application not found" });
+    if (!["SUCCESS", "PARTIALLY_REFUNDED", "REFUNDED"].includes(data.payment?.status ?? "")) {
+      try { await reconcile(orderId, data); data = await getApplication(orderId) as StoredApplication; }
+      catch (error) { console.error("Razorpay reconciliation deferred", { orderId, error }); }
+    } else if (data.payment?.status === "SUCCESS" && data.payment.transactionId && data.payment.is_sent !== 1) {
+      try { await sendSuccessEmail(orderId, await fetchRazorpayPayment(data.payment.transactionId), data); } catch (error) { console.error("Email retry deferred", { orderId, error }); }
+      data = await getApplication(orderId) as StoredApplication;
+    }
+    return response.status(200).json({ success: true, orderId, applicant: { name: data.applicant?.name ?? "", email: data.applicant?.email ?? "" }, pricing: data.pricing, payment: { status: data.payment?.status ?? "UNKNOWN", paidAmount: data.payment?.paidAmount ?? null, refundedAmount: data.payment?.refundedAmount ?? null, transactionId: data.payment?.transactionId ?? null, gatewayOrderId: data.payment?.gatewayOrderId ?? null, paymentMethod: data.payment?.paymentMethod ?? null } });
+  } catch (error) { console.error("Unable to retrieve payment status", error); return response.status(500).json({ success: false, message: "Unable to retrieve payment status" }); }
 }

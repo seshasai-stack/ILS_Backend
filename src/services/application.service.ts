@@ -64,7 +64,7 @@ export async function createPendingApplication(
     applicationStatus: "SUBMITTED",
 
     payment: {
-      gateway: "HDFC_SMARTGATEWAY",
+      gateway: "RAZORPAY",
       status: "CREATED",
 
       expectedAmount: totalAmount,
@@ -85,12 +85,12 @@ export async function createPendingApplication(
 
 export async function markPaymentSessionCreated(
   orderId: string,
-  paymentUrl: string,
+  gatewayOrderId: string,
   gatewayResponse: unknown
 ) {
   await applications.doc(orderId).update({
     "payment.status": "SESSION_CREATED",
-    "payment.paymentUrl": paymentUrl,
+    "payment.gatewayOrderId": gatewayOrderId,
     sessionResponse: gatewayResponse,
     updatedAt: FieldValue.serverTimestamp(),
   });
