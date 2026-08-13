@@ -1,44 +1,30 @@
-import {
-  FieldValue,
-} from "firebase-admin/firestore";
+import { FieldValue } from "firebase-admin/firestore";
 
 import { db } from "../config/firebase.js";
 
-function getRequiredEnvironmentVariable(
-  name: string
-): string {
+function getRequiredEnvironmentVariable(name: string): string {
   const value = process.env[name]?.trim();
 
   if (!value) {
-    throw new Error(
-      `${name} environment variable is required`
-    );
+    throw new Error(`${name} environment variable is required`);
   }
 
   return value;
 }
 
-const brevoApiKey =
-  getRequiredEnvironmentVariable(
-    "BREVO_API_KEY"
-  );
+const brevoApiKey = getRequiredEnvironmentVariable("BREVO_API_KEY");
 
-const brevoApiUrl =
-  "https://api.brevo.com/v3/smtp/email";
+const brevoApiUrl = "https://api.brevo.com/v3/smtp/email";
 
 function parseMailbox(value: string): {
   email: string;
   name?: string;
 } {
   const mailbox = value.trim();
-  const match = mailbox.match(
-    /^(.*?)\s*<([^<>\s]+@[^<>\s]+)>$/
-  );
+  const match = mailbox.match(/^(.*?)\s*<([^<>\s]+@[^<>\s]+)>$/);
 
   if (match) {
-    const name = (match[1] ?? "")
-      .trim()
-      .replace(/^['"]|['"]$/g, "");
+    const name = (match[1] ?? "").trim().replace(/^['"]|['"]$/g, "");
 
     return {
       email: (match[2] ?? "").trim(),
@@ -51,19 +37,14 @@ function parseMailbox(value: string): {
   }
 
   throw new Error(
-    "EMAIL_FROM must be an email address or use Name <email@example.com> format"
+    "EMAIL_FROM must be an email address or use Name <email@example.com> format",
   );
 }
 
-const emailFrom = parseMailbox(
-  getRequiredEnvironmentVariable(
-    "EMAIL_FROM"
-  )
-);
+const emailFrom = parseMailbox(getRequiredEnvironmentVariable("EMAIL_FROM"));
 
 const replyTo = parseMailbox(
-  process.env.EMAIL_REPLY_TO?.trim() ||
-  "ils@corporateconnections-india.com"
+  process.env.EMAIL_REPLY_TO?.trim() || "ils@corporateconnections-india.com",
 );
 
 type PaymentEmailInput = {
@@ -93,10 +74,7 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#039;");
 }
 
-function formatCurrency(
-  amount: number,
-  currency: string
-): string {
+function formatCurrency(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency,
@@ -116,52 +94,26 @@ function formatPaymentDate(): string {
   }).format(new Date());
 }
 
-function createInvoiceEmailHtml(
-  input: PaymentEmailInput
-): string {
-  const name = escapeHtml(
-    input.applicantName
-  );
+function createInvoiceEmailHtml(input: PaymentEmailInput): string {
+  const name = escapeHtml(input.applicantName);
 
-  const email = escapeHtml(
-    input.applicantEmail
-  );
+  const email = escapeHtml(input.applicantEmail);
 
-  const organization = escapeHtml(
-    input.organization || "Not provided"
-  );
+  const organization = escapeHtml(input.organization || "Not provided");
 
-  const designation = escapeHtml(
-    input.designation || "Not provided"
-  );
+  const designation = escapeHtml(input.designation || "Not provided");
 
-  const orderId = escapeHtml(
-    input.orderId
-  );
+  const orderId = escapeHtml(input.orderId);
 
-  const transactionId = escapeHtml(
-    input.transactionId
-  );
+  const transactionId = escapeHtml(input.transactionId);
 
-  const paymentMethod = escapeHtml(
-    input.paymentMethod ||
-      "Online payment"
-  );
+  const paymentMethod = escapeHtml(input.paymentMethod || "Online payment");
 
-  const baseAmount = formatCurrency(
-    input.baseAmount,
-    input.currency
-  );
+  const baseAmount = formatCurrency(input.baseAmount, input.currency);
 
-  const gstAmount = formatCurrency(
-    input.gstAmount,
-    input.currency
-  );
+  const gstAmount = formatCurrency(input.gstAmount, input.currency);
 
-  const totalAmount = formatCurrency(
-    input.totalAmount,
-    input.currency
-  );
+  const totalAmount = formatCurrency(input.totalAmount, input.currency);
 
   const paymentDate = formatPaymentDate();
 
@@ -842,7 +794,7 @@ function createInvoiceEmailHtml(
                   text-decoration:none;
                 "
               >
-                ${replyTo}
+                ${escapeHtml(replyTo.email)}
               </a>
             </td>
           </tr>
@@ -874,9 +826,7 @@ function createInvoiceEmailHtml(
   `.trim();
 }
 
-function createPlainTextEmail(
-  input: PaymentEmailInput
-): string {
+function createPlainTextEmail(input: PaymentEmailInput): string {
   return `
 India Leadership Summit 2026
 
@@ -890,20 +840,11 @@ Registration ID: ${input.orderId}
 Transaction ID: ${input.transactionId}
 Payment method: ${input.paymentMethod || "Online payment"}
 
-Registration fee: ${formatCurrency(
-    input.baseAmount,
-    input.currency
-  )}
+Registration fee: ${formatCurrency(input.baseAmount, input.currency)}
 
-GST (${input.gstRate}%): ${formatCurrency(
-    input.gstAmount,
-    input.currency
-  )}
+GST (${input.gstRate}%): ${formatCurrency(input.gstAmount, input.currency)}
 
-Total paid: ${formatCurrency(
-    input.totalAmount,
-    input.currency
-  )}
+Total paid: ${formatCurrency(input.totalAmount, input.currency)}
 
 Registered email: ${input.applicantEmail}
 Organisation: ${input.organization || "Not provided"}
@@ -920,7 +861,7 @@ C/O Ascent Sphere LLP
 }
 
 export async function sendPaymentSuccessEmailOnce(
-  input: PaymentEmailInput
+  input: PaymentEmailInput,
 ): Promise<void> {
   const applicationReference = db
     .collection("summitApplications")
@@ -930,41 +871,28 @@ export async function sendPaymentSuccessEmailOnce(
    * Check whether an email has already been sent
    * for this transaction.
    */
-  const applicationSnapshot =
-    await applicationReference.get();
+  const applicationSnapshot = await applicationReference.get();
 
   if (!applicationSnapshot.exists) {
-    throw new Error(
-      "Application does not exist for email delivery"
-    );
+    throw new Error("Application does not exist for email delivery");
   }
 
-  const application =
-    applicationSnapshot.data();
+  const application = applicationSnapshot.data();
 
-  const existingIsSent = Number(
-    application?.payment?.is_sent ?? 0
-  );
+  const existingIsSent = Number(application?.payment?.is_sent ?? 0);
 
-  const existingSentTransactionId =
-    String(
-      application?.payment
-        ?.email_transaction_id ?? ""
-    ).trim();
+  const existingSentTransactionId = String(
+    application?.payment?.email_transaction_id ?? "",
+  ).trim();
 
   if (
     existingIsSent === 1 &&
-    existingSentTransactionId ===
-      input.transactionId
+    existingSentTransactionId === input.transactionId
   ) {
-    console.log(
-      "Payment email already sent:",
-      {
-        orderId: input.orderId,
-        transactionId:
-          input.transactionId,
-      }
-    );
+    console.log("Payment email already sent:", {
+      orderId: input.orderId,
+      transactionId: input.transactionId,
+    });
 
     return;
   }
@@ -976,131 +904,134 @@ export async function sendPaymentSuccessEmailOnce(
   await applicationReference.update({
     "payment.is_sent": 0,
 
-    "payment.email_status":
-      "SENDING",
+    "payment.email_status": "SENDING",
 
-    "payment.email_transaction_id":
-      input.transactionId,
+    "payment.email_transaction_id": input.transactionId,
 
-    "payment.email_recipient":
-      input.applicantEmail,
+    "payment.email_recipient": input.applicantEmail,
 
-    "payment.email_attempted_at":
-      FieldValue.serverTimestamp(),
+    "payment.email_attempted_at": FieldValue.serverTimestamp(),
 
-    updatedAt:
-      FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
   });
 
   try {
+    console.log("Attempting Brevo payment email", {
+      orderId: input.orderId,
+      transactionId: input.transactionId,
+      recipient: input.applicantEmail,
+      sender: emailFrom.email,
+    });
+
+    const payload = {
+      sender: emailFrom,
+
+      to: [
+        {
+          email: input.applicantEmail,
+          name: input.applicantName,
+        },
+      ],
+
+      replyTo,
+
+      subject: `Payment confirmed · ILS 2026 · ${input.orderId}`,
+
+      htmlContent: createInvoiceEmailHtml(input),
+
+      textContent: createPlainTextEmail(input),
+
+      tags: ["ils-payment-confirmation"],
+    };
+
     const response = await fetch(brevoApiUrl, {
       method: "POST",
+
       headers: {
         accept: "application/json",
         "api-key": brevoApiKey,
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        sender: emailFrom,
-        to: [{
-          email: input.applicantEmail,
-          name: input.applicantName,
-        }],
-        replyTo,
-        subject:
-          `Payment confirmed · ILS 2026 · ${input.orderId}`,
-        htmlContent: createInvoiceEmailHtml(input),
-        textContent: createPlainTextEmail(input),
-        headers: {
-          "X-Entity-Ref-ID":
-            `ils-payment-${input.orderId}`,
-          /* Brevo suppresses duplicate requests for this key. */
-          idempotencyKey:
-            `ils-payment-success-${input.transactionId}`,
-        },
-        tags: ["ils-payment-confirmation"],
-      }),
+
+      body: JSON.stringify(payload),
     });
 
-    const result = await response.json()
-      .catch(() => ({})) as {
-        messageId?: string;
-        message?: string;
-        code?: string;
-      };
+    const rawResponse = await response.text();
+
+    console.log("Brevo API response", {
+      status: response.status,
+      response: rawResponse,
+      recipient: input.applicantEmail,
+    });
+
+    let result: {
+      messageId?: string;
+      message?: string;
+      code?: string;
+    } = {};
+
+    try {
+      result = JSON.parse(rawResponse);
+    } catch {
+      console.error("Could not parse Brevo response as JSON", rawResponse);
+    }
 
     if (!response.ok) {
       throw new Error(
-        result.message ||
-          result.code ||
-          `Brevo rejected the email (${response.status})`
+        `Brevo email failed (${response.status}): ${
+          result.message || result.code || rawResponse || "Unknown Brevo error"
+        }`,
       );
     }
 
     if (!result.messageId) {
       throw new Error(
-        "Brevo did not return a message ID"
+        `Brevo returned success without messageId: ${rawResponse}`,
       );
     }
 
     /*
-     * Mark is_sent = 1 only after the email
-     * provider confirms the send request.
+     * KEEP EVERYTHING BELOW THIS AS IT IS
+     * Do not delete this part.
      */
+
     await applicationReference.update({
       "payment.is_sent": 1,
 
-      "payment.email_status":
-        "SENT",
+      "payment.email_status": "SENT",
 
-      "payment.email_id":
-        result.messageId,
+      "payment.email_id": result.messageId,
 
-      "payment.email_provider":
-        "BREVO",
+      "payment.email_provider": "BREVO",
 
-      "payment.email_transaction_id":
-        input.transactionId,
+      "payment.email_transaction_id": input.transactionId,
 
-      "payment.email_recipient":
-        input.applicantEmail,
+      "payment.email_recipient": input.applicantEmail,
 
-      "payment.email_sent_at":
-        FieldValue.serverTimestamp(),
+      "payment.email_sent_at": FieldValue.serverTimestamp(),
 
-      updatedAt:
-        FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
-    console.log(
-      "Payment confirmation email sent:",
-      {
-        orderId: input.orderId,
-        transactionId:
-          input.transactionId,
-        emailId: result.messageId,
-        recipient:
-          input.applicantEmail,
-      }
-    );
+    console.log("Payment confirmation email sent:", {
+      orderId: input.orderId,
+      transactionId: input.transactionId,
+      emailId: result.messageId,
+      recipient: input.applicantEmail,
+    });
   } catch (error) {
     await applicationReference
       .update({
         "payment.is_sent": 0,
 
-        "payment.email_status":
-          "FAILED",
+        "payment.email_status": "FAILED",
 
         "payment.email_error":
-          error instanceof Error
-            ? error.message
-            : "Unknown email error",
+          error instanceof Error ? error.message : "Unknown email error",
 
-        "payment.email_transaction_id":
-          input.transactionId,
+        "payment.email_transaction_id": input.transactionId,
 
-        updatedAt:
-          FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       })
       .catch(() => undefined);
 
