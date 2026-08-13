@@ -1,7 +1,7 @@
 export const REGISTRATION_PRICE = {
-  baseAmount: 1,
-  gstRate: 0,
-  gstAmount: 0,
-  totalAmount: 1,
+  baseAmount: 39500,
+  gstRate: 18,
+  gstAmount: 7110,
+  totalAmount: 46610,
   currency: "INR" as const,
 };
