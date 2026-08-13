@@ -7,6 +7,8 @@ exports.app = void 0;
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const application_routes_js_1 = require("./routes/application.routes.js");
+const payment_routes_js_1 = require("./routes/payment.routes.js");
+const payment_controller_js_1 = require("./controllers/payment.controller.js");
 exports.app = (0, express_1.default)();
 exports.app.use((0, cors_1.default)({
     origin: [
@@ -16,6 +18,9 @@ exports.app.use((0, cors_1.default)({
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
 }));
+// Razorpay requires the exact raw bytes for webhook signature verification.
+exports.app.post("/api/payment/webhook", express_1.default.raw({ type: "application/json" }), payment_controller_js_1.razorpayWebhook);
+// Frontend JSON requests
 exports.app.use(express_1.default.json());
 exports.app.get("/api/health", (_request, response) => {
     return response.status(200).json({
@@ -24,6 +29,7 @@ exports.app.get("/api/health", (_request, response) => {
     });
 });
 exports.app.use("/api/routes", application_routes_js_1.applicationRouter);
+exports.app.use("/api/payment", payment_routes_js_1.paymentRouter);
 exports.app.use((_request, response) => {
     return response.status(404).json({
         success: false,
