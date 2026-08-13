@@ -2,7 +2,7 @@
 
 ## Environment
 
-Copy the Razorpay and Resend entries from `.env.example` into the deployment environment. Keep the secret key and webhook secret server-side; only the `keyId` returned by `create-payment` is public.
+Copy the Razorpay and Brevo entries from `.env.example` into the deployment environment. Keep the secret keys and webhook secret server-side; only the `keyId` returned by `create-payment` is public.
 
 In the Razorpay Dashboard, enable automatic capture and register this webhook URL:
 
@@ -35,14 +35,14 @@ Test the complete flow with Razorpay Test Mode before replacing the values with 
 
 ## Payment confirmation email
 
-The backend sends the existing HTML invoice and plain-text fallback through Resend only after Razorpay reports a captured payment. This happens from Checkout verification, a signed webhook, or status reconciliation. The Razorpay payment ID is used as the Resend idempotency key, so repeated callbacks do not send duplicate emails.
+The backend sends the existing HTML invoice and plain-text fallback through Brevo only after Razorpay reports a captured payment. This happens from Checkout verification, a signed webhook, or status reconciliation. The Razorpay payment ID is used as the Brevo idempotency key, and Firestore also records successful delivery requests, so repeated callbacks do not send duplicate emails.
 
-Create a Resend API key, verify a sending domain or subdomain, and configure:
+Create a Brevo API v3 key, authenticate a sending domain or add and verify a sender, and configure:
 
 ```env
-RESEND_API_KEY=re_xxxxxxxxxx
+BREVO_API_KEY=xkeysib-xxxxxxxxxx
 EMAIL_FROM=India Leadership Summit <payments@your-verified-domain.com>
 EMAIL_REPLY_TO=ils@corporateconnections-india.com
 ```
 
-`EMAIL_FROM` must belong to the domain verified in Resend. Email delivery failure never changes a successful payment to failed. The failure is stored as `payment.email_status = "FAILED"`, and the next payment-status request retries delivery using the same idempotency key.
+`EMAIL_FROM` must match a sender authorized in Brevo. Email delivery failure never changes a successful payment to failed. The failure is stored as `payment.email_status = "FAILED"`, and the next payment-status request retries delivery.

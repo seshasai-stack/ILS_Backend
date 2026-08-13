@@ -1,4 +1,3 @@
-import { Resend } from "resend";
 import {
   FieldValue,
 } from "firebase-admin/firestore";
@@ -19,20 +18,53 @@ function getRequiredEnvironmentVariable(
   return value;
 }
 
-const resend = new Resend(
+const brevoApiKey =
   getRequiredEnvironmentVariable(
-    "RESEND_API_KEY"
+    "BREVO_API_KEY"
+  );
+
+const brevoApiUrl =
+  "https://api.brevo.com/v3/smtp/email";
+
+function parseMailbox(value: string): {
+  email: string;
+  name?: string;
+} {
+  const mailbox = value.trim();
+  const match = mailbox.match(
+    /^(.*?)\s*<([^<>\s]+@[^<>\s]+)>$/
+  );
+
+  if (match) {
+    const name = (match[1] ?? "")
+      .trim()
+      .replace(/^['"]|['"]$/g, "");
+
+    return {
+      email: (match[2] ?? "").trim(),
+      ...(name ? { name } : {}),
+    };
+  }
+
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mailbox)) {
+    return { email: mailbox };
+  }
+
+  throw new Error(
+    "EMAIL_FROM must be an email address or use Name <email@example.com> format"
+  );
+}
+
+const emailFrom = parseMailbox(
+  getRequiredEnvironmentVariable(
+    "EMAIL_FROM"
   )
 );
 
-const emailFrom =
-  getRequiredEnvironmentVariable(
-    "EMAIL_FROM"
-  );
-
-const replyTo =
+const replyTo = parseMailbox(
   process.env.EMAIL_REPLY_TO?.trim() ||
-  "ils@corporateconnections-india.com";
+  "ils@corporateconnections-india.com"
+);
 
 type PaymentEmailInput = {
   orderId: string;
@@ -801,7 +833,7 @@ function createInvoiceEmailHtml(
               </p>
 
               <a
-                href="mailto:${replyTo}"
+                href="mailto:${replyTo.email}"
                 style="
                   display:inline-block;
                   margin-top:7px;
@@ -880,7 +912,7 @@ Designation: ${input.designation || "Not provided"}
 This email serves as your registration confirmation and payment invoice.
 
 For assistance, contact:
-${replyTo}
+${replyTo.email}
 
 CorporateConnections AP&TS
 C/O Ascent Sphere LLP
@@ -939,7 +971,7 @@ export async function sendPaymentSuccessEmailOnce(
 
   /*
    * Mark the attempt as in progress.
-   * is_sent remains 0 until Resend confirms success.
+   * is_sent remains 0 until Brevo accepts the email.
    */
   await applicationReference.update({
     "payment.is_sent": 0,
@@ -961,55 +993,53 @@ export async function sendPaymentSuccessEmailOnce(
   });
 
   try {
-    const { data, error } =
-      await resend.emails.send(
-        {
-          from: emailFrom,
-
-          to: [
-            input.applicantEmail,
-          ],
-
-          replyTo,
-
-          subject:
-            `Payment confirmed · ILS 2026 · ${input.orderId}`,
-
-          html:
-            createInvoiceEmailHtml(
-              input
-            ),
-
-          text:
-            createPlainTextEmail(
-              input
-            ),
-
-          headers: {
-            "X-Entity-Ref-ID":
-              `ils-payment-${input.orderId}`,
-          },
-        },
-        {
-          /*
-           * Prevent duplicate sends when the payment
-           * callback is submitted multiple times.
-           */
+    const response = await fetch(brevoApiUrl, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "api-key": brevoApiKey,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        sender: emailFrom,
+        to: [{
+          email: input.applicantEmail,
+          name: input.applicantName,
+        }],
+        replyTo,
+        subject:
+          `Payment confirmed · ILS 2026 · ${input.orderId}`,
+        htmlContent: createInvoiceEmailHtml(input),
+        textContent: createPlainTextEmail(input),
+        headers: {
+          "X-Entity-Ref-ID":
+            `ils-payment-${input.orderId}`,
+          /* Brevo suppresses duplicate requests for this key. */
           idempotencyKey:
-            `ils-payment-success/${input.transactionId}`,
-        }
-      );
+            `ils-payment-success-${input.transactionId}`,
+        },
+        tags: ["ils-payment-confirmation"],
+      }),
+    });
 
-    if (error) {
+    const result = await response.json()
+      .catch(() => ({})) as {
+        messageId?: string;
+        message?: string;
+        code?: string;
+      };
+
+    if (!response.ok) {
       throw new Error(
-        error.message ||
-          "Email provider rejected the email"
+        result.message ||
+          result.code ||
+          `Brevo rejected the email (${response.status})`
       );
     }
 
-    if (!data?.id) {
+    if (!result.messageId) {
       throw new Error(
-        "Email provider did not return an email ID"
+        "Brevo did not return a message ID"
       );
     }
 
@@ -1024,7 +1054,10 @@ export async function sendPaymentSuccessEmailOnce(
         "SENT",
 
       "payment.email_id":
-        data.id,
+        result.messageId,
+
+      "payment.email_provider":
+        "BREVO",
 
       "payment.email_transaction_id":
         input.transactionId,
@@ -1045,7 +1078,7 @@ export async function sendPaymentSuccessEmailOnce(
         orderId: input.orderId,
         transactionId:
           input.transactionId,
-        emailId: data.id,
+        emailId: result.messageId,
         recipient:
           input.applicantEmail,
       }
