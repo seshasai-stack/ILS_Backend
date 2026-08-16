@@ -521,6 +521,7 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                   <td
                     style="
                       padding:13px 18px;
+                      border-bottom:1px solid #302d27;
                       color:#8f887d;
                       font-size:12px;
                     "
@@ -532,6 +533,7 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                     align="right"
                     style="
                       padding:13px 18px;
+                      border-bottom:1px solid #302d27;
                       color:#f5f0e6;
                       font-size:12px;
                     "
@@ -550,10 +552,10 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                 </tr>
 
                 <tr>
-                  <td style="padding:13px 18px;border-bottom:1px solid #302d27;color:#8f887d;font-size:12px;vertical-align:top;">
+                  <td style="padding:13px 18px;color:#8f887d;font-size:12px;vertical-align:top;">
                     Address
                   </td>
-                  <td align="right" style="padding:13px 18px;border-bottom:1px solid #302d27;color:#f5f0e6;font-size:12px;line-height:19px;word-break:break-word;">
+                  <td align="right" style="padding:13px 18px;color:#f5f0e6;font-size:12px;line-height:19px;word-break:break-word;">
                     ${address}
                   </td>
                 </tr>
