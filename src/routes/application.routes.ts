@@ -4,20 +4,11 @@ import {
   type Response,
 } from "express";
 import { FieldValue } from "firebase-admin/firestore";
-import { z } from "zod";
 
 import { db } from "../config/firebase.js";
+import { applicationSchema } from "../validators/application.validator.js";
 
 export const applicationRouter = Router();
-
-const applicationSchema = z.object({
-  name: z.string().trim().min(2).max(100),
-  email: z.string().trim().email().max(255),
-  phone: z.string().trim().min(6).max(30),
-  organization: z.string().trim().min(2).max(150),
-  designation: z.string().trim().min(2).max(100),
-  intent: z.string().trim().max(800).optional().default(""),
-});
 
 applicationRouter.post(
   "/submit-application",
@@ -41,12 +32,8 @@ applicationRouter.post(
       const document = await db
         .collection("summitApplications")
         .add({
-          name: application.name,
+          ...application,
           email: application.email.toLowerCase(),
-          phone: application.phone,
-          organization: application.organization,
-          designation: application.designation,
-          intent: application.intent || "",
           applicationStatus: "SUBMITTED",
           paymentStatus: "NOT_STARTED",
           createdAt: FieldValue.serverTimestamp(),

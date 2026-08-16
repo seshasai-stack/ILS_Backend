@@ -60,8 +60,23 @@ type PaymentEmailInput = {
   applicantName: string;
   applicantEmail: string;
   phone?: string;
+  registrationType?: string;
+  chapterName?: string;
   organization?: string;
   designation?: string;
+  industry?: string;
+  industryOther?: string;
+  sponsorshipInterest?: string;
+  sponsorshipDetails?: string;
+  dietaryRestrictions?: string[];
+  dietaryOther?: string;
+  address1?: string;
+  address2?: string;
+  country?: string;
+  city?: string;
+  stateProvince?: string;
+  postalCode?: string;
+  vatGstNumber?: string;
   intent?: string;
 
   baseAmount: number;
@@ -106,6 +121,22 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
   const name = escapeHtml(input.applicantName);
 
   const email = escapeHtml(input.applicantEmail);
+
+  const phone = escapeHtml(input.phone || "-");
+
+  const address = escapeHtml(
+    [
+      input.address1,
+      input.address2,
+      input.city,
+      input.stateProvince,
+      input.postalCode,
+      input.country,
+    ]
+      .map((part) => part?.trim())
+      .filter(Boolean)
+      .join(", ") || "-",
+  );
 
   const organization = escapeHtml(input.organization || "Not provided");
 
@@ -403,6 +434,24 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                     "
                   >
                     Billed to
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:13px 18px;border-bottom:1px solid #302d27;color:#8f887d;font-size:12px;">
+                    Phone
+                  </td>
+                  <td align="right" style="padding:13px 18px;border-bottom:1px solid #302d27;color:#f5f0e6;font-size:12px;word-break:break-word;">
+                    ${phone}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:13px 18px;border-bottom:1px solid #302d27;color:#8f887d;font-size:12px;vertical-align:top;">
+                    Address
+                  </td>
+                  <td align="right" style="padding:13px 18px;border-bottom:1px solid #302d27;color:#f5f0e6;font-size:12px;line-height:19px;word-break:break-word;">
+                    ${address}
                   </td>
                 </tr>
 
@@ -855,6 +904,15 @@ GST (${input.gstRate}%): ${formatCurrency(input.gstAmount, input.currency)}
 Total paid: ${formatCurrency(input.totalAmount, input.currency)}
 
 Registered email: ${input.applicantEmail}
+Phone: ${input.phone || "-"}
+Address: ${[
+  input.address1,
+  input.address2,
+  input.city,
+  input.stateProvince,
+  input.postalCode,
+  input.country,
+].filter((part) => part?.trim()).join(", ") || "-"}
 Organisation: ${input.organization || "Not provided"}
 Designation: ${input.designation || "Not provided"}
 
@@ -869,16 +927,32 @@ C/O Ascent Sphere LLP
 }
 
 function createTeamNotificationEmailHtml(input: PaymentEmailInput): string {
+  const valueOrDash = (value?: string) => value?.trim() || "-";
   const rows: Array<[string, string]> = [
+    ["Registration type", valueOrDash(input.registrationType)],
     ["Name", input.applicantName],
     ["Email", input.applicantEmail],
-    ["Phone", input.phone || "Not provided"],
-    ["Organisation", input.organization || "Not provided"],
-    ["Designation", input.designation || "Not provided"],
-    ["Reason for attending", input.intent || "Not provided"],
+    ["Phone", valueOrDash(input.phone)],
+    ["Chapter / market / region", valueOrDash(input.chapterName)],
+    ["Organisation", valueOrDash(input.organization)],
+    ["Designation", valueOrDash(input.designation)],
+    ["Industry", valueOrDash(input.industry)],
+    ["Other industry", valueOrDash(input.industryOther)],
+    ["Sponsorship interest", valueOrDash(input.sponsorshipInterest)],
+    ["Sponsorship details", valueOrDash(input.sponsorshipDetails)],
+    ["Dietary restrictions", input.dietaryRestrictions?.length ? input.dietaryRestrictions.join(", ") : "-"],
+    ["Other dietary restriction", valueOrDash(input.dietaryOther)],
+    ["Address 1", valueOrDash(input.address1)],
+    ["Address 2", valueOrDash(input.address2)],
+    ["Country / region", valueOrDash(input.country)],
+    ["City", valueOrDash(input.city)],
+    ["State / province", valueOrDash(input.stateProvince)],
+    ["ZIP / postal code", valueOrDash(input.postalCode)],
+    ["VAT / GST number", valueOrDash(input.vatGstNumber)],
+    ["Reason for attending", valueOrDash(input.intent)],
     ["Registration ID", input.orderId],
     ["Transaction ID", input.transactionId],
-    ["Payment method", input.paymentMethod || "Online payment"],
+    ["Payment method", valueOrDash(input.paymentMethod)],
   ];
 
   const detailRows = rows
@@ -950,6 +1024,7 @@ function createTeamNotificationEmailHtml(input: PaymentEmailInput): string {
 }
 
 function createTeamNotificationPlainText(input: PaymentEmailInput): string {
+  const valueOrDash = (value?: string) => value?.trim() || "-";
   return `
 India Leadership Summit 2026 — New registration
 
@@ -957,14 +1032,29 @@ ${input.applicantName} has successfully registered and completed payment.
 
 Name: ${input.applicantName}
 Email: ${input.applicantEmail}
-Phone: ${input.phone || "Not provided"}
-Organisation: ${input.organization || "Not provided"}
-Designation: ${input.designation || "Not provided"}
-Reason for attending: ${input.intent || "Not provided"}
+Phone: ${valueOrDash(input.phone)}
+Registration type: ${valueOrDash(input.registrationType)}
+Chapter / market / region: ${valueOrDash(input.chapterName)}
+Organisation: ${valueOrDash(input.organization)}
+Designation: ${valueOrDash(input.designation)}
+Industry: ${valueOrDash(input.industry)}
+Other industry: ${valueOrDash(input.industryOther)}
+Sponsorship interest: ${valueOrDash(input.sponsorshipInterest)}
+Sponsorship details: ${valueOrDash(input.sponsorshipDetails)}
+Dietary restrictions: ${input.dietaryRestrictions?.length ? input.dietaryRestrictions.join(", ") : "-"}
+Other dietary restriction: ${valueOrDash(input.dietaryOther)}
+Address 1: ${valueOrDash(input.address1)}
+Address 2: ${valueOrDash(input.address2)}
+Country / region: ${valueOrDash(input.country)}
+City: ${valueOrDash(input.city)}
+State / province: ${valueOrDash(input.stateProvince)}
+ZIP / postal code: ${valueOrDash(input.postalCode)}
+VAT / GST number: ${valueOrDash(input.vatGstNumber)}
+Reason for attending: ${valueOrDash(input.intent)}
 
 Registration ID: ${input.orderId}
 Transaction ID: ${input.transactionId}
-Payment method: ${input.paymentMethod || "Online payment"}
+Payment method: ${valueOrDash(input.paymentMethod)}
 Registration fee: ${formatCurrency(input.baseAmount, input.currency)}
 GST (${input.gstRate}%): ${formatCurrency(input.gstAmount, input.currency)}
 Total paid: ${formatCurrency(input.totalAmount, input.currency)}

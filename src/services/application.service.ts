@@ -5,11 +5,26 @@ import {
 import { db } from "../config/firebase.js";
 
 export interface ApplicationInput {
+  registrationType: string;
   name: string;
   email: string;
   phone: string;
+  chapterName: string;
   organization: string;
   designation: string;
+  industry: string;
+  industryOther?: string;
+  sponsorshipInterest?: string;
+  sponsorshipDetails?: string;
+  dietaryRestrictions: string[];
+  dietaryOther?: string;
+  address1: string;
+  address2?: string;
+  country: string;
+  city: string;
+  stateProvince?: string;
+  postalCode: string;
+  vatGstNumber?: string;
   intent?: string;
 }
 
@@ -45,11 +60,26 @@ export async function createPendingApplication(
     customerId,
 
     applicant: {
+      registrationType: application.registrationType,
       name: application.name,
       email: application.email.toLowerCase(),
       phone: application.phone,
+      chapterName: application.chapterName,
       organization: application.organization,
       designation: application.designation,
+      industry: application.industry,
+      industryOther: application.industryOther || "",
+      sponsorshipInterest: application.sponsorshipInterest || "",
+      sponsorshipDetails: application.sponsorshipDetails || "",
+      dietaryRestrictions: application.dietaryRestrictions,
+      dietaryOther: application.dietaryOther || "",
+      address1: application.address1,
+      address2: application.address2 || "",
+      country: application.country,
+      city: application.city,
+      stateProvince: application.stateProvince || "",
+      postalCode: application.postalCode,
+      vatGstNumber: application.vatGstNumber || "",
       intent: application.intent || "",
     },
 

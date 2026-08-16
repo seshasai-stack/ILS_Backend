@@ -23,7 +23,14 @@ const cancellationSchema = z.object({ orderId: z.string().trim().min(1), reason:
 
 type PaymentStatus = "CREATED" | "SESSION_CREATED" | "SESSION_FAILED" | "PENDING" | "AUTHORIZED" | "FAILED" | "CANCELLED" | "SUCCESS" | "PARTIALLY_REFUNDED" | "REFUNDED";
 type StoredApplication = {
-  applicant?: { name?: string; email?: string; phone?: string; organization?: string; designation?: string; intent?: string };
+  applicant?: {
+    name?: string; email?: string; phone?: string; registrationType?: string;
+    chapterName?: string; organization?: string; designation?: string;
+    industry?: string; industryOther?: string; sponsorshipInterest?: string;
+    sponsorshipDetails?: string; dietaryRestrictions?: string[]; dietaryOther?: string;
+    address1?: string; address2?: string; country?: string; city?: string;
+    stateProvince?: string; postalCode?: string; vatGstNumber?: string; intent?: string;
+  };
   pricing?: { baseAmount?: number; gstRate?: number; gstAmount?: number; totalAmount?: number; currency?: string };
   payment?: { status?: PaymentStatus; gatewayOrderId?: string | null; transactionId?: string | null; paymentMethod?: string | null; paidAmount?: number | null; refundedAmount?: number | null; is_sent?: number; team_email_is_sent?: number };
 };
@@ -49,8 +56,16 @@ async function sendSuccessEmail(localOrderId: string, payment: RazorpayPayment, 
   if (!email || !name) return;
   const emailInput = {
     orderId: localOrderId, transactionId: payment.id, applicantName: name, applicantEmail: email,
-    phone: data.applicant?.phone, organization: data.applicant?.organization,
-    designation: data.applicant?.designation, intent: data.applicant?.intent,
+    phone: data.applicant?.phone, registrationType: data.applicant?.registrationType,
+    chapterName: data.applicant?.chapterName, organization: data.applicant?.organization,
+    designation: data.applicant?.designation, industry: data.applicant?.industry,
+    industryOther: data.applicant?.industryOther, sponsorshipInterest: data.applicant?.sponsorshipInterest,
+    sponsorshipDetails: data.applicant?.sponsorshipDetails,
+    dietaryRestrictions: data.applicant?.dietaryRestrictions, dietaryOther: data.applicant?.dietaryOther,
+    address1: data.applicant?.address1, address2: data.applicant?.address2,
+    country: data.applicant?.country, city: data.applicant?.city,
+    stateProvince: data.applicant?.stateProvince, postalCode: data.applicant?.postalCode,
+    vatGstNumber: data.applicant?.vatGstNumber, intent: data.applicant?.intent,
     baseAmount: Number(data.pricing?.baseAmount ?? 0), gstRate: Number(data.pricing?.gstRate ?? 0),
     gstAmount: Number(data.pricing?.gstAmount ?? 0), totalAmount: Number(data.pricing?.totalAmount ?? 0),
     currency: String(data.pricing?.currency ?? "INR").toUpperCase(), paymentMethod: payment.method ?? "Online payment",
