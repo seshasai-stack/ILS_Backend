@@ -1202,7 +1202,7 @@ export async function sendTeamRegistrationEmailOnce(
         htmlContent: createTeamNotificationEmailHtml(input),
         textContent: createTeamNotificationPlainText(input),
         headers: {
-          idempotencyKey: `ils-team-registration-${input.transactionId}`,
+          idempotencyKey: `team-${input.transactionId}`,
         },
         tags: ["ils-team-registration"],
       }),
