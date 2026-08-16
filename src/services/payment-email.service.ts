@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { FieldValue } from "firebase-admin/firestore";
 
 import { db } from "../config/firebase.js";
@@ -1168,6 +1169,14 @@ export async function sendTeamRegistrationEmailOnce(
   const sentTransactionId = String(
     application?.payment?.team_email_transaction_id ?? "",
   ).trim();
+  const existingIdempotencyKey = String(
+    application?.payment?.team_email_idempotency_key ?? "",
+  ).trim();
+  const idempotencyKey =
+    sentTransactionId === input.transactionId &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(existingIdempotencyKey)
+      ? existingIdempotencyKey
+      : randomUUID();
 
   if (alreadySent === 1 && sentTransactionId === input.transactionId) {
     console.log("Team registration email already sent:", {
@@ -1181,6 +1190,7 @@ export async function sendTeamRegistrationEmailOnce(
     "payment.team_email_is_sent": 0,
     "payment.team_email_status": "SENDING",
     "payment.team_email_transaction_id": input.transactionId,
+    "payment.team_email_idempotency_key": idempotencyKey,
     "payment.team_email_recipient": teamNotificationRecipient.email,
     "payment.team_email_attempted_at": FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
@@ -1202,7 +1212,7 @@ export async function sendTeamRegistrationEmailOnce(
         htmlContent: createTeamNotificationEmailHtml(input),
         textContent: createTeamNotificationPlainText(input),
         headers: {
-          idempotencyKey: `team-${input.transactionId}`,
+          idempotencyKey,
         },
         tags: ["ils-team-registration"],
       }),
