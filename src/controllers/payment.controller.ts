@@ -10,7 +10,10 @@ import {
   createRazorpayOrder, fetchRazorpayOrderPayments, fetchRazorpayPayment, getRazorpayKeyId,
   verifyCheckoutSignature, verifyWebhookSignature, type RazorpayPayment, type RazorpayRefund,
 } from "../services/razorpay.service.js";
-import { sendPaymentSuccessEmailOnce } from "../services/payment-email.service.js";
+import {
+  sendPaymentSuccessEmailOnce,
+  sendTeamRegistrationEmailOnce,
+} from "../services/payment-email.service.js";
 
 const verificationSchema = z.object({
   orderId: z.string().trim().min(1), razorpay_order_id: z.string().trim().min(1),
@@ -20,9 +23,9 @@ const cancellationSchema = z.object({ orderId: z.string().trim().min(1), reason:
 
 type PaymentStatus = "CREATED" | "SESSION_CREATED" | "SESSION_FAILED" | "PENDING" | "AUTHORIZED" | "FAILED" | "CANCELLED" | "SUCCESS" | "PARTIALLY_REFUNDED" | "REFUNDED";
 type StoredApplication = {
-  applicant?: { name?: string; email?: string; organization?: string; designation?: string };
+  applicant?: { name?: string; email?: string; phone?: string; organization?: string; designation?: string; intent?: string };
   pricing?: { baseAmount?: number; gstRate?: number; gstAmount?: number; totalAmount?: number; currency?: string };
-  payment?: { status?: PaymentStatus; gatewayOrderId?: string | null; transactionId?: string | null; paymentMethod?: string | null; paidAmount?: number | null; refundedAmount?: number | null; is_sent?: number };
+  payment?: { status?: PaymentStatus; gatewayOrderId?: string | null; transactionId?: string | null; paymentMethod?: string | null; paidAmount?: number | null; refundedAmount?: number | null; is_sent?: number; team_email_is_sent?: number };
 };
 
 const applications = db.collection("summitApplications");
@@ -44,15 +47,26 @@ async function sendSuccessEmail(localOrderId: string, payment: RazorpayPayment, 
   const email = String(data.applicant?.email ?? "").trim().toLowerCase();
   const name = String(data.applicant?.name ?? "").trim();
   if (!email || !name) return;
-  try {
-    await sendPaymentSuccessEmailOnce({
-      orderId: localOrderId, transactionId: payment.id, applicantName: name, applicantEmail: email,
-      organization: data.applicant?.organization, designation: data.applicant?.designation,
-      baseAmount: Number(data.pricing?.baseAmount ?? 0), gstRate: Number(data.pricing?.gstRate ?? 0),
-      gstAmount: Number(data.pricing?.gstAmount ?? 0), totalAmount: Number(data.pricing?.totalAmount ?? 0),
-      currency: String(data.pricing?.currency ?? "INR").toUpperCase(), paymentMethod: payment.method ?? "Online payment",
-    });
-  } catch (error) { console.error("Payment succeeded but confirmation email failed", { localOrderId, error }); }
+  const emailInput = {
+    orderId: localOrderId, transactionId: payment.id, applicantName: name, applicantEmail: email,
+    phone: data.applicant?.phone, organization: data.applicant?.organization,
+    designation: data.applicant?.designation, intent: data.applicant?.intent,
+    baseAmount: Number(data.pricing?.baseAmount ?? 0), gstRate: Number(data.pricing?.gstRate ?? 0),
+    gstAmount: Number(data.pricing?.gstAmount ?? 0), totalAmount: Number(data.pricing?.totalAmount ?? 0),
+    currency: String(data.pricing?.currency ?? "INR").toUpperCase(), paymentMethod: payment.method ?? "Online payment",
+  };
+
+  const [customerEmail, teamEmail] = await Promise.allSettled([
+    sendPaymentSuccessEmailOnce(emailInput),
+    sendTeamRegistrationEmailOnce(emailInput),
+  ]);
+
+  if (customerEmail.status === "rejected") {
+    console.error("Payment succeeded but customer confirmation email failed", { localOrderId, error: customerEmail.reason });
+  }
+  if (teamEmail.status === "rejected") {
+    console.error("Payment succeeded but team registration email failed", { localOrderId, error: teamEmail.reason });
+  }
 }
 
 async function completePayment(localOrderId: string, payment: RazorpayPayment, source: "checkout" | "webhook" | "reconciliation") {
@@ -221,7 +235,11 @@ export async function paymentStatus(request: Request, response: Response) {
     if (!["SUCCESS", "PARTIALLY_REFUNDED", "REFUNDED"].includes(data.payment?.status ?? "")) {
       try { await reconcile(orderId, data); data = await getApplication(orderId) as StoredApplication; }
       catch (error) { console.error("Razorpay reconciliation deferred", { orderId, error }); }
-    } else if (data.payment?.status === "SUCCESS" && data.payment.transactionId && data.payment.is_sent !== 1) {
+    } else if (
+      data.payment?.status === "SUCCESS" &&
+      data.payment.transactionId &&
+      (data.payment.is_sent !== 1 || data.payment.team_email_is_sent !== 1)
+    ) {
       try { await sendSuccessEmail(orderId, await fetchRazorpayPayment(data.payment.transactionId), data); } catch (error) { console.error("Email retry deferred", { orderId, error }); }
       data = await getApplication(orderId) as StoredApplication;
     }

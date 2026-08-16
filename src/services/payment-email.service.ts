@@ -47,14 +47,21 @@ const replyTo = parseMailbox(
   process.env.EMAIL_REPLY_TO?.trim() || "ils@corporateconnections-india.com",
 );
 
+const teamNotificationRecipient = {
+  email: "ils@corporateconnections-india.com",
+  name: "India Leadership Summit Team",
+};
+
 type PaymentEmailInput = {
   orderId: string;
   transactionId: string;
 
   applicantName: string;
   applicantEmail: string;
+  phone?: string;
   organization?: string;
   designation?: string;
+  intent?: string;
 
   baseAmount: number;
   gstRate: number;
@@ -860,6 +867,109 @@ C/O Ascent Sphere LLP
   `.trim();
 }
 
+function createTeamNotificationEmailHtml(input: PaymentEmailInput): string {
+  const rows: Array<[string, string]> = [
+    ["Name", input.applicantName],
+    ["Email", input.applicantEmail],
+    ["Phone", input.phone || "Not provided"],
+    ["Organisation", input.organization || "Not provided"],
+    ["Designation", input.designation || "Not provided"],
+    ["Reason for attending", input.intent || "Not provided"],
+    ["Registration ID", input.orderId],
+    ["Transaction ID", input.transactionId],
+    ["Payment method", input.paymentMethod || "Online payment"],
+  ];
+
+  const detailRows = rows
+    .map(
+      ([label, value]) => `
+        <tr>
+          <td style="width:38%;padding:13px 18px;border-bottom:1px solid #302d27;color:#8f887d;font-size:12px;vertical-align:top;">
+            ${escapeHtml(label)}
+          </td>
+          <td align="right" style="padding:13px 18px;border-bottom:1px solid #302d27;color:#f5f0e6;font-size:12px;line-height:19px;word-break:break-word;">
+            ${escapeHtml(value)}
+          </td>
+        </tr>`,
+    )
+    .join("");
+
+  return `
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>New ILS 2026 Registration</title>
+</head>
+<body style="margin:0;padding:0;background-color:#11110f;font-family:Arial,Helvetica,sans-serif;color:#f5f0e6;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
+    ${escapeHtml(input.applicantName)} has completed registration and payment for ILS 2026.
+  </div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:#11110f;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 12px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:640px;background-color:#1b1a17;border:1px solid #4a4337;border-collapse:collapse;">
+          <tr><td style="height:4px;background-color:#c4a15a;font-size:0;line-height:0;">&nbsp;</td></tr>
+          <tr>
+            <td align="center" style="padding:36px 28px 30px;">
+              <div style="color:#c9a75e;font-size:10px;line-height:16px;letter-spacing:3px;text-transform:uppercase;">ILS 2026 · Team notification</div>
+              <div style="margin-top:14px;color:#f5f0e6;font-family:Georgia,'Times New Roman',serif;font-size:30px;line-height:38px;">New Summit Registration</div>
+              <div style="width:54px;height:1px;margin:24px auto 0;background-color:#9d8045;">&nbsp;</div>
+              <p style="max-width:500px;margin:22px auto 0;color:#b8b0a2;font-size:14px;line-height:24px;">
+                ${escapeHtml(input.applicantName)} has successfully registered and completed payment for India Leadership Summit 2026.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 28px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border:1px solid #3d382f;border-collapse:collapse;">
+                <tr><td colspan="2" style="padding:14px 18px;border-bottom:1px solid #3d382f;color:#c9a75e;font-size:10px;letter-spacing:2px;text-transform:uppercase;">Registrant details</td></tr>
+                ${detailRows}
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 28px 0;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:#24211c;border:1px solid #4a4337;border-collapse:collapse;">
+                <tr><td style="padding:13px 18px;color:#8f887d;font-size:12px;">Registration fee</td><td align="right" style="padding:13px 18px;color:#f5f0e6;font-size:12px;">${formatCurrency(input.baseAmount, input.currency)}</td></tr>
+                <tr><td style="padding:13px 18px;border-top:1px solid #302d27;color:#8f887d;font-size:12px;">GST (${input.gstRate}%)</td><td align="right" style="padding:13px 18px;border-top:1px solid #302d27;color:#f5f0e6;font-size:12px;">${formatCurrency(input.gstAmount, input.currency)}</td></tr>
+                <tr><td style="padding:17px 18px;border-top:1px solid #4a4337;color:#d3b36a;font-size:13px;font-weight:bold;">Total paid</td><td align="right" style="padding:17px 18px;border-top:1px solid #4a4337;color:#d5b66e;font-size:18px;font-weight:bold;">${formatCurrency(input.totalAmount, input.currency)}</td></tr>
+              </table>
+            </td>
+          </tr>
+          <tr><td align="center" style="padding:28px;color:#777064;font-size:10px;line-height:18px;">Payment confirmed on ${formatPaymentDate()}<br />CorporateConnections AP&amp;TS · C/O Ascent Sphere LLP</td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `.trim();
+}
+
+function createTeamNotificationPlainText(input: PaymentEmailInput): string {
+  return `
+India Leadership Summit 2026 — New registration
+
+${input.applicantName} has successfully registered and completed payment.
+
+Name: ${input.applicantName}
+Email: ${input.applicantEmail}
+Phone: ${input.phone || "Not provided"}
+Organisation: ${input.organization || "Not provided"}
+Designation: ${input.designation || "Not provided"}
+Reason for attending: ${input.intent || "Not provided"}
+
+Registration ID: ${input.orderId}
+Transaction ID: ${input.transactionId}
+Payment method: ${input.paymentMethod || "Online payment"}
+Registration fee: ${formatCurrency(input.baseAmount, input.currency)}
+GST (${input.gstRate}%): ${formatCurrency(input.gstAmount, input.currency)}
+Total paid: ${formatCurrency(input.totalAmount, input.currency)}
+  `.trim();
+}
+
 export async function sendPaymentSuccessEmailOnce(
   input: PaymentEmailInput,
 ): Promise<void> {
@@ -1031,6 +1141,125 @@ export async function sendPaymentSuccessEmailOnce(
 
         "payment.email_transaction_id": input.transactionId,
 
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+      .catch(() => undefined);
+
+    throw error;
+  }
+}
+
+export async function sendTeamRegistrationEmailOnce(
+  input: PaymentEmailInput,
+): Promise<void> {
+  const applicationReference = db
+    .collection("summitApplications")
+    .doc(input.orderId);
+  const applicationSnapshot = await applicationReference.get();
+
+  if (!applicationSnapshot.exists) {
+    throw new Error("Application does not exist for team email delivery");
+  }
+
+  const application = applicationSnapshot.data();
+  const alreadySent = Number(
+    application?.payment?.team_email_is_sent ?? 0,
+  );
+  const sentTransactionId = String(
+    application?.payment?.team_email_transaction_id ?? "",
+  ).trim();
+
+  if (alreadySent === 1 && sentTransactionId === input.transactionId) {
+    console.log("Team registration email already sent:", {
+      orderId: input.orderId,
+      transactionId: input.transactionId,
+    });
+    return;
+  }
+
+  await applicationReference.update({
+    "payment.team_email_is_sent": 0,
+    "payment.team_email_status": "SENDING",
+    "payment.team_email_transaction_id": input.transactionId,
+    "payment.team_email_recipient": teamNotificationRecipient.email,
+    "payment.team_email_attempted_at": FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  try {
+    const response = await fetch(brevoApiUrl, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "api-key": brevoApiKey,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        sender: emailFrom,
+        to: [teamNotificationRecipient],
+        replyTo,
+        subject: `New ILS 2026 registration · ${input.applicantName} · ${input.orderId}`,
+        htmlContent: createTeamNotificationEmailHtml(input),
+        textContent: createTeamNotificationPlainText(input),
+        headers: {
+          idempotencyKey: `ils-team-registration-${input.transactionId}`,
+        },
+        tags: ["ils-team-registration"],
+      }),
+    });
+
+    const rawResponse = await response.text();
+    let result: {
+      messageId?: string;
+      message?: string;
+      code?: string;
+    } = {};
+
+    try {
+      result = JSON.parse(rawResponse);
+    } catch {
+      console.error("Could not parse Brevo team-email response", rawResponse);
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Brevo team email failed (${response.status}): ${
+          result.message || result.code || rawResponse || "Unknown Brevo error"
+        }`,
+      );
+    }
+
+    if (!result.messageId) {
+      throw new Error(
+        `Brevo returned success without a team-email messageId: ${rawResponse}`,
+      );
+    }
+
+    await applicationReference.update({
+      "payment.team_email_is_sent": 1,
+      "payment.team_email_status": "SENT",
+      "payment.team_email_id": result.messageId,
+      "payment.team_email_provider": "BREVO",
+      "payment.team_email_transaction_id": input.transactionId,
+      "payment.team_email_recipient": teamNotificationRecipient.email,
+      "payment.team_email_sent_at": FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    console.log("Team registration email sent:", {
+      orderId: input.orderId,
+      transactionId: input.transactionId,
+      emailId: result.messageId,
+      recipient: teamNotificationRecipient.email,
+    });
+  } catch (error) {
+    await applicationReference
+      .update({
+        "payment.team_email_is_sent": 0,
+        "payment.team_email_status": "FAILED",
+        "payment.team_email_error":
+          error instanceof Error ? error.message : "Unknown team email error",
+        "payment.team_email_transaction_id": input.transactionId,
         updatedAt: FieldValue.serverTimestamp(),
       })
       .catch(() => undefined);
