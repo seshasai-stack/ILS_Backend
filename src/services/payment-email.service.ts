@@ -438,6 +438,7 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                 </tr>
 
                 
+
                 <tr>
                   <td
                     style="
@@ -538,11 +539,8 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                     ${designation}
                   </td>
                 </tr>
-              </table>
-            </td>
-          </tr>
 
-          <tr>
+                <tr>
                   <td style="padding:13px 18px;border-bottom:1px solid #302d27;color:#8f887d;font-size:12px;">
                     Phone
                   </td>
@@ -560,6 +558,9 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                   </td>
                 </tr>
 
+              </table>
+            </td>
+          </tr>
 
           <!-- Payment references -->
           <tr>
