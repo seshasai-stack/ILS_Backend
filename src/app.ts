@@ -6,6 +6,7 @@ import express, {
 import cors from "cors";
 
 import { applicationRouter } from "./routes/application.routes.js";
+import { analyticsRouter } from "./routes/analytics.routes.js";
 import { paymentRouter } from "./routes/payment.routes.js";
 import { razorpayWebhook } from "./controllers/payment.controller.js";
 
@@ -18,7 +19,7 @@ app.use(
       "https://ils.corporateconnections-india.com",
     ],
     methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
+    allowedHeaders: ["Content-Type", "X-Analytics-Key"],
   })
 );
 
@@ -41,6 +42,7 @@ app.get(
 
 app.use("/api/routes", applicationRouter);
 app.use("/api/payment", paymentRouter);
+app.use("/api/analytics", analyticsRouter);
 
 app.use(
   (_request: Request, response: Response) => {
