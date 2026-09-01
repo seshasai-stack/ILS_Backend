@@ -94,6 +94,7 @@ export async function analyticsOverview(request: Request, response: Response) {
     const registrationTypeCounts = new Map<string, number>();
     const industryCounts = new Map<string, number>();
     const countryCounts = new Map<string, number>();
+    const cityCounts = new Map<string, number>();
     const daily = new Map<string, { registrations: number; revenue: number }>();
 
     for (let offset = 29; offset >= 0; offset -= 1) {
@@ -125,6 +126,7 @@ export async function analyticsOverview(request: Request, response: Response) {
       const registrationType = text(applicant.registrationType ?? data.registrationType);
       const industry = text(applicant.industry ?? data.industry);
       const country = text(applicant.country ?? data.country);
+      const city = text(applicant.city ?? data.city);
       const dateKey = registeredAt ? istDateKey(registeredAt) : "";
 
       increment(statusCounts, status);
@@ -136,6 +138,7 @@ export async function analyticsOverview(request: Request, response: Response) {
         increment(registrationTypeCounts, registrationType);
         increment(industryCounts, industry);
         increment(countryCounts, country);
+        increment(cityCounts, city);
         if (dateKey === todayKey) todayRegistrations += 1;
         if (dateKey === yesterdayKey) yesterdayRegistrations += 1;
         if (dateKey.startsWith(currentMonthKey)) currentMonthRegistrations += 1;
@@ -170,7 +173,7 @@ export async function analyticsOverview(request: Request, response: Response) {
           dietaryOther: text(applicant.dietaryOther ?? data.dietaryOther),
           address1: text(applicant.address1 ?? data.address1),
           address2: text(applicant.address2 ?? data.address2),
-          city: text(applicant.city ?? data.city),
+          city,
           stateProvince: text(applicant.stateProvince ?? data.stateProvince),
           postalCode: text(applicant.postalCode ?? data.postalCode),
           address: [
@@ -239,6 +242,7 @@ export async function analyticsOverview(request: Request, response: Response) {
         registrationType: breakdown(registrationTypeCounts),
         industry: breakdown(industryCounts),
         country: breakdown(countryCounts),
+        city: breakdown(cityCounts),
       },
       table: {
         rows: filteredRows.slice(start, start + pageSize),
