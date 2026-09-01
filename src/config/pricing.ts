@@ -1,5 +1,5 @@
-const baseAmount = 10;
-const gstRate = 0;
+const baseAmount = 39500;
+const gstRate = 18;
 const gstAmount = Number(((baseAmount * gstRate) / 100).toFixed(2));
 const totalAmount = Number((baseAmount + gstAmount).toFixed(2));
 
