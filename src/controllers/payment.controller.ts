@@ -14,6 +14,7 @@ import {
   sendPaymentSuccessEmailOnce,
   sendTeamRegistrationEmailOnce,
 } from "../services/payment-email.service.js";
+import { ensureInvoiceNumber } from "../services/invoice-number.service.js";
 
 const verificationSchema = z.object({
   orderId: z.string().trim().min(1), razorpay_order_id: z.string().trim().min(1),
@@ -23,6 +24,7 @@ const cancellationSchema = z.object({ orderId: z.string().trim().min(1), reason:
 
 type PaymentStatus = "CREATED" | "SESSION_CREATED" | "SESSION_FAILED" | "PENDING" | "AUTHORIZED" | "FAILED" | "CANCELLED" | "SUCCESS" | "PARTIALLY_REFUNDED" | "REFUNDED";
 type StoredApplication = {
+  invoice_no?: string;
   applicant?: {
     name?: string; email?: string; phone?: string; registrationType?: string;
     chapterName?: string; organization?: string; designation?: string;
@@ -55,7 +57,7 @@ async function sendSuccessEmail(localOrderId: string, payment: RazorpayPayment, 
   const name = String(data.applicant?.name ?? "").trim();
   if (!email || !name) return;
   const emailInput = {
-    orderId: localOrderId, transactionId: payment.id, applicantName: name, applicantEmail: email,
+    orderId: localOrderId, invoiceNo: String(data.invoice_no ?? ""), transactionId: payment.id, applicantName: name, applicantEmail: email,
     phone: data.applicant?.phone, registrationType: data.applicant?.registrationType,
     chapterName: data.applicant?.chapterName, organization: data.applicant?.organization,
     designation: data.applicant?.designation, industry: data.applicant?.industry,
@@ -108,7 +110,9 @@ async function completePayment(localOrderId: string, payment: RazorpayPayment, s
       verifiedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
     });
   });
-  await sendSuccessEmail(localOrderId, payment, application);
+  await ensureInvoiceNumber(localOrderId);
+  const invoicedApplication = await getApplication(localOrderId) as StoredApplication | null;
+  await sendSuccessEmail(localOrderId, payment, invoicedApplication ?? application);
 }
 
 async function updateNonSuccess(localOrderId: string, status: PaymentStatus, payment?: RazorpayPayment, extra: Record<string, unknown> = {}) {

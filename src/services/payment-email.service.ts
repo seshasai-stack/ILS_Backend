@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { FieldValue } from "firebase-admin/firestore";
 
 import { db } from "../config/firebase.js";
+import { createInvoicePdf } from "./invoice-pdf.service.js";
 
 function getRequiredEnvironmentVariable(name: string): string {
   const value = process.env[name]?.trim();
@@ -53,8 +54,14 @@ const teamNotificationRecipient = {
   name: "India Leadership Summit Team",
 };
 
+const paymentConfirmationCc = [
+  { email: "ilsregistrations@corporateconnections-india.com", name: "ILS Registrations" },
+  { email: "ils@corporateconnections-india.com", name: "India Leadership Summit" },
+];
+
 type PaymentEmailInput = {
   orderId: string;
+  invoiceNo: string;
   transactionId: string;
 
   applicantName: string;
@@ -346,8 +353,8 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                 Dear ${name}, your payment for India
                 Leadership Summit 2026 has been
                 successfully verified. Please retain
-                this email as your payment invoice and
-                registration confirmation.
+                the attached PDF invoice for your records.
+                This email confirms your registration.
               </p>
             </td>
           </tr>
@@ -382,7 +389,7 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                       text-transform:uppercase;
                     "
                   >
-                    Registration Invoice
+                    Payment Summary
                   </td>
 
                   <td
@@ -757,7 +764,7 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                       font-size:12px;
                     "
                   >
-                    GST (${input.gstRate}%)
+                    CGST (${input.gstRate / 2}%)
                   </td>
 
                   <td
@@ -769,7 +776,16 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                       font-size:12px;
                     "
                   >
-                    ${gstAmount}
+                    ${formatCurrency(input.gstAmount / 2, input.currency)}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:14px 18px;border-bottom:1px solid #302d27;color:#8f887d;font-size:12px;">
+                    SGST (${input.gstRate / 2}%)
+                  </td>
+                  <td align="right" style="padding:14px 18px;border-bottom:1px solid #302d27;color:#f5f0e6;font-size:12px;">
+                    ${formatCurrency(input.gstAmount / 2, input.currency)}
                   </td>
                 </tr>
 
@@ -818,10 +834,9 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                   line-height:22px;
                 "
               >
-                This email serves as your registration
-                confirmation and payment invoice. Please
-                keep your Registration ID and Transaction
-                ID for future correspondence.
+                Your official invoice ${escapeHtml(input.invoiceNo)} is attached
+                as a PDF. Please keep the invoice, Registration ID and
+                Transaction ID for future correspondence.
               </div>
             </td>
           </tr>
@@ -899,12 +914,15 @@ Dear ${input.applicantName},
 Your India Leadership Summit 2026 registration has been confirmed.
 
 Registration ID: ${input.orderId}
+Invoice number: ${input.invoiceNo}
 Transaction ID: ${input.transactionId}
 Payment method: ${input.paymentMethod || "Online payment"}
 
 Registration fee: ${formatCurrency(input.baseAmount, input.currency)}
 
-GST (${input.gstRate}%): ${formatCurrency(input.gstAmount, input.currency)}
+CGST (${input.gstRate / 2}%): ${formatCurrency(input.gstAmount / 2, input.currency)}
+
+SGST (${input.gstRate / 2}%): ${formatCurrency(input.gstAmount / 2, input.currency)}
 
 Total paid: ${formatCurrency(input.totalAmount, input.currency)}
 
@@ -921,7 +939,7 @@ Address: ${[
 Organisation: ${input.organization || "Not provided"}
 Designation: ${input.designation || "Not provided"}
 
-This email serves as your registration confirmation and payment invoice.
+Your official PDF invoice is attached to this registration confirmation.
 
 For assistance, contact:
 ${replyTo.email}
@@ -955,6 +973,7 @@ function createTeamNotificationEmailHtml(input: PaymentEmailInput): string {
     ["ZIP / postal code", valueOrDash(input.postalCode)],
     ["VAT / GST number", valueOrDash(input.vatGstNumber)],
     ["Reason for attending", valueOrDash(input.intent)],
+    ["Invoice number", valueOrDash(input.invoiceNo)],
     ["Registration ID", input.orderId],
     ["Transaction ID", input.transactionId],
     ["Payment method", valueOrDash(input.paymentMethod)],
@@ -1057,6 +1076,7 @@ ZIP / postal code: ${valueOrDash(input.postalCode)}
 VAT / GST number: ${valueOrDash(input.vatGstNumber)}
 Reason for attending: ${valueOrDash(input.intent)}
 
+Invoice number: ${valueOrDash(input.invoiceNo)}
 Registration ID: ${input.orderId}
 Transaction ID: ${input.transactionId}
 Payment method: ${valueOrDash(input.paymentMethod)}
@@ -1129,6 +1149,29 @@ export async function sendPaymentSuccessEmailOnce(
       sender: emailFrom.email,
     });
 
+    if (!input.invoiceNo) throw new Error("Invoice number is required before sending payment confirmation");
+    const invoicePdf = await createInvoicePdf({
+      invoiceNumber: input.invoiceNo,
+      applicantName: input.applicantName,
+      applicantEmail: input.applicantEmail,
+      phone: input.phone,
+      organization: input.organization,
+      address1: input.address1,
+      address2: input.address2,
+      city: input.city,
+      stateProvince: input.stateProvince,
+      postalCode: input.postalCode,
+      country: input.country,
+      vatGstNumber: input.vatGstNumber,
+      orderId: input.orderId,
+      transactionId: input.transactionId,
+      baseAmount: input.baseAmount,
+      gstRate: input.gstRate,
+      gstAmount: input.gstAmount,
+      totalAmount: input.totalAmount,
+      currency: input.currency,
+    });
+
     const payload = {
       sender: emailFrom,
 
@@ -1139,13 +1182,20 @@ export async function sendPaymentSuccessEmailOnce(
         },
       ],
 
+      cc: paymentConfirmationCc,
+
       replyTo,
 
-      subject: `Payment confirmed · ILS 2026 · ${input.orderId}`,
+      subject: `Payment confirmed · ILS 2026 · Invoice ${input.invoiceNo}`,
 
       htmlContent: createInvoiceEmailHtml(input),
 
       textContent: createPlainTextEmail(input),
+
+      attachment: [{
+        content: invoicePdf.toString("base64"),
+        name: `${input.invoiceNo.replaceAll("/", "-")}-invoice.pdf`,
+      }],
 
       tags: ["ils-payment-confirmation"],
     };
@@ -1213,6 +1263,8 @@ export async function sendPaymentSuccessEmailOnce(
       "payment.email_transaction_id": input.transactionId,
 
       "payment.email_recipient": input.applicantEmail,
+
+      "payment.email_cc": paymentConfirmationCc.map((recipient) => recipient.email),
 
       "payment.email_sent_at": FieldValue.serverTimestamp(),
 

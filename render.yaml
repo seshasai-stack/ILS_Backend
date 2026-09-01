@@ -1,0 +1,21 @@
+services:
+  - type: cron
+    name: ils-daily-registration-report
+    runtime: node
+    schedule: "30 3 * * *"
+    buildCommand: npm ci && npm run build
+    startCommand: npm run report:daily
+    plan: starter
+    envVars:
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_REPLY_TO
+        sync: false
