@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { FieldValue } from "firebase-admin/firestore";
 import { z } from "zod";
 import { db } from "../config/firebase.js";
-import { REGISTRATION_PRICE } from "../config/pricing.js";
+import { getRegistrationPrice } from "../config/pricing.js";
 import { applicationSchema } from "../validators/application.validator.js";
 import { generateCustomerId, generateOrderId } from "../utils/order-id.js";
 import { createPendingApplication, getApplication, markPaymentSessionCreated, markPaymentSessionFailed } from "../services/application.service.js";
@@ -156,7 +156,7 @@ export async function createPayment(request: Request, response: Response) {
   const validation = applicationSchema.safeParse(request.body);
   if (!validation.success) return response.status(400).json({ success: false, message: "Invalid application details", errors: validation.error.flatten().fieldErrors });
   const application = validation.data, orderId = generateOrderId(), customerId = generateCustomerId();
-  const { baseAmount, gstRate, gstAmount, totalAmount, currency } = REGISTRATION_PRICE;
+  const { baseAmount, gstRate, gstAmount, totalAmount, currency } = getRegistrationPrice(application.registrationType);
   try {
     await createPendingApplication({ application, orderId, customerId, baseAmount, gstRate, gstAmount, totalAmount });
     try {

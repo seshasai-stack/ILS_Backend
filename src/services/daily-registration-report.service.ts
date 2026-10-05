@@ -124,7 +124,7 @@ function createHtml(reportDate: string, registrations: Registration[]): string {
   const cards = registrations.map((item, index) => {
     const fields: Array<[string, string]> = [
       ["Registration type", item.registrationType], ["Name", item.name], ["Email", item.email],
-      ["Phone", item.phone], ["Chapter / market / region", item.chapterName], ["Organisation", item.organization],
+      ["Phone", item.phone], [item.registrationType === "Spouse" ? "Spouse name" : "Chapter / market / region", item.chapterName], ["Organisation", item.organization],
       ["Designation", item.designation], ["Industry", item.industry], ["Other industry", item.industryOther],
       ["Sponsorship interest", item.sponsorshipInterest], ["Sponsorship details", item.sponsorshipDetails],
       ["Dietary restrictions", item.dietaryRestrictions], ["Other dietary restriction", item.dietaryOther],
@@ -164,7 +164,7 @@ function createText(reportDate: string, registrations: Registration[]): string {
 Registration type: ${item.registrationType}
 Email: ${item.email}
 Phone: ${item.phone}
-Chapter / market / region: ${item.chapterName}
+${item.registrationType === "Spouse" ? "Spouse name" : "Chapter / market / region"}: ${item.chapterName}
 Organisation: ${item.organization}
 Designation: ${item.designation}
 Industry: ${item.industry}

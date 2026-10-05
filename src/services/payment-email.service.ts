@@ -956,7 +956,7 @@ function createTeamNotificationEmailHtml(input: PaymentEmailInput): string {
     ["Name", input.applicantName],
     ["Email", input.applicantEmail],
     ["Phone", valueOrDash(input.phone)],
-    ["Chapter / market / region", valueOrDash(input.chapterName)],
+    [input.registrationType === "Spouse" ? "Spouse name" : "Chapter / market / region", valueOrDash(input.chapterName)],
     ["Organisation", valueOrDash(input.organization)],
     ["Designation", valueOrDash(input.designation)],
     ["Industry", valueOrDash(input.industry)],
@@ -1058,7 +1058,7 @@ Name: ${input.applicantName}
 Email: ${input.applicantEmail}
 Phone: ${valueOrDash(input.phone)}
 Registration type: ${valueOrDash(input.registrationType)}
-Chapter / market / region: ${valueOrDash(input.chapterName)}
+${input.registrationType === "Spouse" ? "Spouse name" : "Chapter / market / region"}: ${valueOrDash(input.chapterName)}
 Organisation: ${valueOrDash(input.organization)}
 Designation: ${valueOrDash(input.designation)}
 Industry: ${valueOrDash(input.industry)}
