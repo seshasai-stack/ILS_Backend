@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { FieldValue } from "firebase-admin/firestore";
 
 import { db } from "../config/firebase.js";
@@ -17,6 +19,11 @@ function getRequiredEnvironmentVariable(name: string): string {
 const brevoApiKey = getRequiredEnvironmentVariable("BREVO_API_KEY");
 
 const brevoApiUrl = "https://api.brevo.com/v3/smtp/email";
+
+const accommodationGuidePath = resolve(
+  process.cwd(),
+  "assets/Novotel - ILS 2026.pdf",
+);
 
 function parseMailbox(value: string): {
   email: string;
@@ -837,6 +844,10 @@ function createInvoiceEmailHtml(input: PaymentEmailInput): string {
                 Your official invoice ${escapeHtml(input.invoiceNo)} is attached
                 as a PDF. Please keep the invoice, Registration ID and
                 Transaction ID for future correspondence.
+                <br /><br />
+                For accommodation, we have Preferential Rates with Novotel,
+                Hyderabad. Please open the PDF attached below (Novotel - ILS
+                2026) for the steps and link to booking.
               </div>
             </td>
           </tr>
@@ -940,6 +951,8 @@ Organisation: ${input.organization || "Not provided"}
 Designation: ${input.designation || "Not provided"}
 
 Your official PDF invoice is attached to this registration confirmation.
+
+For accommodation, we have Preferential Rates with Novotel, Hyderabad. Please open the PDF attached below (Novotel - ILS 2026) for the steps and link to booking.
 
 For assistance, contact:
 ${replyTo.email}
@@ -1171,6 +1184,7 @@ export async function sendPaymentSuccessEmailOnce(
       totalAmount: input.totalAmount,
       currency: input.currency,
     });
+    const accommodationGuidePdf = await readFile(accommodationGuidePath);
 
     const payload = {
       sender: emailFrom,
@@ -1192,10 +1206,16 @@ export async function sendPaymentSuccessEmailOnce(
 
       textContent: createPlainTextEmail(input),
 
-      attachment: [{
-        content: invoicePdf.toString("base64"),
-        name: `${input.invoiceNo.replaceAll("/", "-")}-invoice.pdf`,
-      }],
+      attachment: [
+        {
+          content: invoicePdf.toString("base64"),
+          name: `${input.invoiceNo.replaceAll("/", "-")}-invoice.pdf`,
+        },
+        {
+          content: accommodationGuidePdf.toString("base64"),
+          name: "Novotel - ILS 2026.pdf",
+        },
+      ],
 
       tags: ["ils-payment-confirmation"],
     };
