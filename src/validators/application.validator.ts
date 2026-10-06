@@ -8,6 +8,7 @@ export const applicationSchema = z
       "Member + Spouse",
       "Executive Director",
       "Spouse",
+      "Guest / Non-member",
       "Guest/Non-member",
     ]),
     name: z.string().trim().min(2).max(100),
@@ -61,16 +62,23 @@ export const applicationSchema = z
       context.addIssue({ code: "custom", path: ["dietaryOther"], message: "Please specify your dietary restriction" });
     }
   })
-  .transform((data) => data.registrationType === "Spouse"
-    ? {
-        ...data,
-        organization: "",
-        designation: "",
-        industry: "",
-        industryOther: "",
-        sponsorshipInterest: "",
-        sponsorshipDetails: "",
-      }
-    : data);
+  .transform((data) => {
+    const registrationType = data.registrationType === "Guest/Non-member"
+      ? "Guest / Non-member"
+      : data.registrationType;
+
+    return registrationType === "Spouse"
+      ? {
+          ...data,
+          registrationType,
+          organization: "",
+          designation: "",
+          industry: "",
+          industryOther: "",
+          sponsorshipInterest: "",
+          sponsorshipDetails: "",
+        }
+      : { ...data, registrationType };
+  });
 
 export type ApplicationInput = z.infer<typeof applicationSchema>;

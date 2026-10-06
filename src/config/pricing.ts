@@ -14,5 +14,9 @@ function price(baseAmount: number) {
 export function getRegistrationPrice(registrationType: string) {
   if (registrationType === "Member + Spouse") return price(49_500);
   if (registrationType === "Spouse") return price(10_000);
+  if (
+    registrationType === "Guest / Non-member" ||
+    registrationType === "Guest/Non-member"
+  ) return price(40_000);
   return price(39_500);
 }
